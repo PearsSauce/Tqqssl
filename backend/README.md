@@ -1,14 +1,5 @@
-# Tqqssl Personal Backend
+# Backend
 
-从零编写的个人版 API，只包含本地单管理员注册、登录、退出和会话查询基础能力。
+Go API 服务，负责本地管理员认证、会话管理、健康检查和本地数据持久化。
 
-不包含：SSO/OIDC、Agent、订阅、支付、公告、兑换、多租户商业逻辑。
-
-## 开发
-
-```bash
-go test ./...
-go run ./cmd/api
-```
-
-默认监听 `:8080`，数据写入 `data/tqqssl-personal.json`。
+详细项目说明、接口和运行方式见根目录 [`README.md`](../README.md)。

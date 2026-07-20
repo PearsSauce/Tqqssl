@@ -1,15 +1,5 @@
-# Tqqssl Personal Frontend
+# Frontend
 
-从零编写的个人版前端，只使用 `@heroui/react` OSS 组件。
+React + TypeScript + Vite 前端，使用 HeroUI OSS 组件实现登录、初始化注册和基础控制台。
 
-不包含：HeroUI Pro、SSO/OIDC、Agent、订阅、支付、公告、兑换。
-
-## 开发
-
-```bash
-corepack pnpm install
-corepack pnpm build
-corepack pnpm dev
-```
-
-默认 API：`http://localhost:8080/api/v1`。
+详细项目说明和运行方式见根目录 [`README.md`](../README.md)。
