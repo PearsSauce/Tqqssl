@@ -141,6 +141,33 @@ func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
 		t.Fatalf("dns secret should be encrypted in data file: %s", string(data))
 	}
 
+	updateDNSRec := requestWithCookie(handler, http.MethodPatch, "/api/v1/dns-accounts/"+dnsAccount.ID, `{
+		"name":"AliDNS 轮换账号",
+		"provider":"dnspod",
+		"accessKey":"ROTATEDAKID123456",
+		"secretKey":"RotatedSecretValueShouldNotLeak",
+		"remark":"已轮换"
+	}`, cookie)
+	if updateDNSRec.Code != http.StatusOK {
+		t.Fatalf("update dns account = %d %s", updateDNSRec.Code, updateDNSRec.Body.String())
+	}
+	if strings.Contains(updateDNSRec.Body.String(), "RotatedSecretValueShouldNotLeak") || strings.Contains(updateDNSRec.Body.String(), "secretKey") {
+		t.Fatalf("dns update dto leaked secret: %s", updateDNSRec.Body.String())
+	}
+	if err := json.Unmarshal(updateDNSRec.Body.Bytes(), &dnsAccount); err != nil {
+		t.Fatal(err)
+	}
+	if dnsAccount.Name != "AliDNS 轮换账号" || dnsAccount.Provider != "dnspod" || dnsAccount.Remark != "已轮换" {
+		t.Fatalf("unexpected updated dns dto: %#v", dnsAccount)
+	}
+	data, err = os.ReadFile(dataFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "RotatedSecretValueShouldNotLeak") || !strings.Contains(string(data), "enc:v1:") {
+		t.Fatalf("rotated dns secret should be encrypted in data file: %s", string(data))
+	}
+
 	listDNSRec := requestWithCookie(handler, http.MethodGet, "/api/v1/dns-accounts", "", cookie)
 	if listDNSRec.Code != http.StatusOK {
 		t.Fatalf("list dns accounts = %d %s", listDNSRec.Code, listDNSRec.Body.String())

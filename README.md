@@ -24,6 +24,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - HttpOnly、SameSite=Lax 会话 Cookie
 - `/healthz` 和 `/readyz` 健康检查
 - DNS 账号创建、列表和删除
+- DNS 账号元数据更新和 SecretKey 轮换
 - DNS 账号 SecretKey 使用本地密钥文件加密后写入数据文件，API 响应不返回明文
 - 证书申请记录创建和列表
 - 证书申请域名基础校验、SAN 去重和小写规范化
@@ -90,6 +91,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 | `GET` | `/api/v1/auth/me` | 查询当前登录用户 |
 | `GET` | `/api/v1/dns-accounts` | 查询 DNS 账号列表 |
 | `POST` | `/api/v1/dns-accounts` | 创建 DNS 账号 |
+| `PATCH` | `/api/v1/dns-accounts/{id}` | 更新 DNS 账号元数据，可选轮换 SecretKey |
 | `DELETE` | `/api/v1/dns-accounts/{id}` | 删除未被证书申请引用的 DNS 账号 |
 | `GET` | `/api/v1/certificates/applications` | 查询证书申请记录 |
 | `POST` | `/api/v1/certificates/applications` | 创建证书申请记录 |

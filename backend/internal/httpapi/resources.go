@@ -46,6 +46,14 @@ type createDNSAccountRequest struct {
 	Remark    string `json:"remark"`
 }
 
+type updateDNSAccountRequest struct {
+	Name      *string `json:"name"`
+	Provider  *string `json:"provider"`
+	AccessKey *string `json:"accessKey"`
+	SecretKey *string `json:"secretKey"`
+	Remark    *string `json:"remark"`
+}
+
 type createCertificateApplicationRequest struct {
 	PrimaryDomain string   `json:"primaryDomain"`
 	SANs          []string `json:"sans"`
@@ -83,7 +91,11 @@ func (s *Server) createDNSAccount(w http.ResponseWriter, r *http.Request, _ stor
 	accessKey := strings.TrimSpace(req.AccessKey)
 	secretKey := strings.TrimSpace(req.SecretKey)
 	remark := strings.TrimSpace(req.Remark)
-	if err := validateDNSAccountInput(name, provider, accessKey, secretKey, remark); err != nil {
+	if err := validateDNSAccountMetadata(name, provider, accessKey, remark); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateDNSSecret(secretKey); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -119,6 +131,77 @@ func (s *Server) createDNSAccount(w http.ResponseWriter, r *http.Request, _ stor
 		return
 	}
 	writeJSON(w, http.StatusCreated, toDNSAccountDTO(account))
+}
+
+func (s *Server) updateDNSAccount(w http.ResponseWriter, r *http.Request, _ store.User) {
+	accountID := strings.TrimSpace(r.PathValue("id"))
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, "DNS 账号 ID 不能为空")
+		return
+	}
+	var req updateDNSAccountRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	existing, err := s.store.GetDNSAccount(accountID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "DNS 账号不存在")
+		return
+	}
+	if err != nil {
+		s.logger.Error("get dns account failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "读取 DNS 账号失败")
+		return
+	}
+
+	next := existing
+	if req.Name != nil {
+		next.Name = strings.TrimSpace(*req.Name)
+	}
+	if req.Provider != nil {
+		next.Provider = normalizeProvider(*req.Provider)
+	}
+	if req.AccessKey != nil {
+		next.AccessKey = strings.TrimSpace(*req.AccessKey)
+	}
+	if req.Remark != nil {
+		next.Remark = strings.TrimSpace(*req.Remark)
+	}
+	if err := validateDNSAccountMetadata(next.Name, next.Provider, next.AccessKey, next.Remark); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.SecretKey != nil {
+		secretKey := strings.TrimSpace(*req.SecretKey)
+		if err := validateDNSSecret(secretKey); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		encryptedSecretKey, err := s.secretBox.Encrypt(secretKey)
+		if err != nil {
+			s.logger.Error("encrypt dns secret failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "加密 DNS 凭据失败")
+			return
+		}
+		next.SecretKey = encryptedSecretKey
+	}
+	next.UpdatedAt = time.Now().UTC()
+
+	account, err := s.store.UpdateDNSAccount(next)
+	if errors.Is(err, store.ErrAlreadyExists) {
+		writeError(w, http.StatusConflict, "DNS 账号名称已存在")
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "DNS 账号不存在")
+		return
+	}
+	if err != nil {
+		s.logger.Error("update dns account failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "更新 DNS 账号失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, toDNSAccountDTO(account))
 }
 
 func (s *Server) deleteDNSAccount(w http.ResponseWriter, r *http.Request, _ store.User) {
@@ -207,7 +290,7 @@ func (s *Server) createCertificateApplication(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, toCertificateApplicationDTO(application, account.Name))
 }
 
-func validateDNSAccountInput(name string, provider string, accessKey string, secretKey string, remark string) error {
+func validateDNSAccountMetadata(name string, provider string, accessKey string, remark string) error {
 	if len([]rune(name)) < 1 || len([]rune(name)) > 64 {
 		return errors.New("DNS 账号名称长度需要在 1 到 64 个字符之间")
 	}
@@ -222,11 +305,15 @@ func validateDNSAccountInput(name string, provider string, accessKey string, sec
 	if len([]rune(accessKey)) > 256 {
 		return errors.New("AccessKey 长度不能超过 256 个字符")
 	}
-	if len([]rune(secretKey)) < 1 || len([]rune(secretKey)) > 512 {
-		return errors.New("SecretKey 长度需要在 1 到 512 个字符之间")
-	}
 	if len([]rune(remark)) > 300 {
 		return errors.New("备注长度不能超过 300 个字符")
+	}
+	return nil
+}
+
+func validateDNSSecret(secretKey string) error {
+	if len([]rune(secretKey)) < 1 || len([]rune(secretKey)) > 512 {
+		return errors.New("SecretKey 长度需要在 1 到 512 个字符之间")
 	}
 	return nil
 }

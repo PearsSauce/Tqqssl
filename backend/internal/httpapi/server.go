@@ -57,6 +57,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/me", s.me)
 	mux.HandleFunc("GET /api/v1/dns-accounts", s.requireAuth(s.listDNSAccounts))
 	mux.HandleFunc("POST /api/v1/dns-accounts", s.requireAuth(s.createDNSAccount))
+	mux.HandleFunc("PATCH /api/v1/dns-accounts/{id}", s.requireAuth(s.updateDNSAccount))
 	mux.HandleFunc("DELETE /api/v1/dns-accounts/{id}", s.requireAuth(s.deleteDNSAccount))
 	mux.HandleFunc("GET /api/v1/certificates/applications", s.requireAuth(s.listCertificateApplications))
 	mux.HandleFunc("POST /api/v1/certificates/applications", s.requireAuth(s.createCertificateApplication))
@@ -69,7 +70,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", s.cfg.FrontendOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

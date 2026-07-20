@@ -223,6 +223,26 @@ func (s *Store) CreateDNSAccount(account DNSAccount) (DNSAccount, error) {
 	return account, s.saveLocked()
 }
 
+func (s *Store) UpdateDNSAccount(account DNSAccount) (DNSAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	index := -1
+	for i, existing := range s.doc.DNSAccounts {
+		if existing.ID == account.ID {
+			index = i
+			continue
+		}
+		if normalize(existing.Name) == normalize(account.Name) {
+			return DNSAccount{}, ErrAlreadyExists
+		}
+	}
+	if index == -1 {
+		return DNSAccount{}, ErrNotFound
+	}
+	s.doc.DNSAccounts[index] = account
+	return account, s.saveLocked()
+}
+
 func (s *Store) DeleteDNSAccount(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

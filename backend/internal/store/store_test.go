@@ -58,3 +58,37 @@ func TestEncryptPlaintextDNSSecretsMigratesOnlyPlaintext(t *testing.T) {
 		t.Fatalf("encrypted secret = %q", encrypted.SecretKey)
 	}
 }
+
+func TestUpdateDNSAccountRejectsDuplicateName(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "store.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	first, err := st.CreateDNSAccount(DNSAccount{
+		ID:        "first",
+		Name:      "first",
+		Provider:  "alidns",
+		SecretKey: "enc:v1:first",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateDNSAccount(DNSAccount{
+		ID:        "second",
+		Name:      "second",
+		Provider:  "alidns",
+		SecretKey: "enc:v1:second",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	first.Name = "second"
+	if _, err := st.UpdateDNSAccount(first); err != ErrAlreadyExists {
+		t.Fatalf("duplicate update error = %v, want ErrAlreadyExists", err)
+	}
+}
