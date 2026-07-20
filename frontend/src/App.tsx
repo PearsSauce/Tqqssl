@@ -2,6 +2,7 @@ import { Alert, Button, Card, Description, FieldError, Form, Input, Label, Spinn
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError, apiRequest } from "./api";
+import { DashboardShell, type DashboardNavigationItem } from "./layouts/dashboard-shell";
 import type { ACMEAccountRegistration, ACMEDirectoryCheck, ACMEStatus, CertificateApplication, CertificateAuthorization, CertificatePrecheck, DNSAccount, RegisterOptions, User } from "./types";
 
 type AuthResponse = {
@@ -9,8 +10,36 @@ type AuthResponse = {
 };
 
 type Route = "/" | "/login" | "/register";
+type DashboardSection = "overview" | "acme" | "dns" | "certificates";
 
 const routeSet = new Set<Route>(["/", "/login", "/register"]);
+const dashboardSectionSet = new Set<DashboardSection>(["overview", "acme", "dns", "certificates"]);
+
+const baseDashboardNavigationItems: Array<Omit<DashboardNavigationItem<DashboardSection>, "badge">> = [
+  { id: "overview", label: "总览", description: "资源概览与实现边界" },
+  { id: "acme", label: "ACME", description: "账号就绪、目录检查和注册" },
+  { id: "dns", label: "DNS 账号", description: "本地加密保存 DNS 凭据" },
+  { id: "certificates", label: "证书申请", description: "DNS-01 申请与记录预览" }
+];
+
+const dashboardSectionMeta: Record<DashboardSection, { title: string; description: string }> = {
+  overview: {
+    title: "个人版控制台",
+    description: "查看个人版 DNS、证书申请和 ACME 配置概览，并确认当前实现边界。"
+  },
+  acme: {
+    title: "ACME 配置",
+    description: "检查签发前置条件、验证 ACME directory，并注册本地 ACME 账号。"
+  },
+  dns: {
+    title: "DNS 账号管理",
+    description: "维护 DNS API 凭据。SecretKey 只加密写入本地数据文件，不会从 API 返回。"
+  },
+  certificates: {
+    title: "证书申请",
+    description: "创建 DNS-01 证书申请、发起 ACME order，并查看需要写入的 TXT 记录。"
+  }
+};
 
 export default function App() {
   const [route, setRoute] = useState<Route>(() => normalizeRoute(window.location.pathname));
@@ -259,12 +288,25 @@ function Feature({ title, description }: { title: string; description: string })
 
 function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<void> }) {
   const createdAt = useMemo(() => formatDateTime(user.createdAt), [user.createdAt]);
+  const [activeSection, setActiveSection] = useState<DashboardSection>(() => getDashboardSectionFromLocation());
   const [pending, setPending] = useState(false);
   const [dnsAccounts, setDNSAccounts] = useState<DNSAccount[]>([]);
   const [applications, setApplications] = useState<CertificateApplication[]>([]);
   const [acmeStatus, setACMEStatus] = useState<ACMEStatus | null>(null);
   const [resourcesLoading, setResourcesLoading] = useState(true);
   const [resourcesError, setResourcesError] = useState("");
+
+  useEffect(() => {
+    function syncSectionFromLocation() {
+      setActiveSection(getDashboardSectionFromLocation());
+    }
+    window.addEventListener("hashchange", syncSectionFromLocation);
+    window.addEventListener("popstate", syncSectionFromLocation);
+    return () => {
+      window.removeEventListener("hashchange", syncSectionFromLocation);
+      window.removeEventListener("popstate", syncSectionFromLocation);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -298,73 +340,154 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
     };
   }, []);
 
+  const navigationItems: DashboardNavigationItem<DashboardSection>[] = baseDashboardNavigationItems.map((item) => {
+    if (item.id === "acme") {
+      return { ...item, badge: acmeStatus?.ready ? "就绪" : "待配置" };
+    }
+    if (item.id === "dns") {
+      return { ...item, badge: `${dnsAccounts.length} 个` };
+    }
+    if (item.id === "certificates") {
+      return { ...item, badge: `${applications.length} 条` };
+    }
+    return item;
+  });
+  const activeSectionMeta = dashboardSectionMeta[activeSection];
+
+  function navigateDashboardSection(nextSection: DashboardSection) {
+    const nextURL = nextSection === "overview" ? "/" : `/#${nextSection}`;
+    if (`${window.location.pathname}${window.location.hash}` !== nextURL) {
+      window.history.pushState({}, "", nextURL);
+    }
+    setActiveSection(nextSection);
+  }
+
+  function logout() {
+    setPending(true);
+    void onLogout().finally(() => setPending(false));
+  }
+
   return (
-    <main className="min-h-screen px-5 py-8">
-      <section className="mx-auto grid max-w-6xl gap-6">
-        <header className="flex flex-col gap-4 rounded-[2rem] border border-white/70 bg-white/80 p-6 shadow-xl shadow-blue-950/5 backdrop-blur md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-sm text-slate-500">个人版控制台</p>
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-950">欢迎，{user.username}</h1>
-            <p className="mt-2 text-sm text-slate-500">账号创建于 {createdAt}</p>
-          </div>
-          <Button
-            variant="secondary"
-            isPending={pending}
-            onPress={() => {
-              setPending(true);
-              void onLogout().finally(() => setPending(false));
-            }}
-          >
-            退出登录
-          </Button>
-        </header>
-
-        <div className="grid gap-4 md:grid-cols-4">
-          <SummaryCard title="DNS 账号" value={`${dnsAccounts.length} 个`} description="本地加密保存 DNS API 凭据，接口响应不返回 SecretKey。" />
-          <SummaryCard title="证书申请" value={`${applications.length} 条`} description="建立申请记录后可创建 ACME order，challenge mode 固定为 dns-01。" />
-          <SummaryCard title="ACME 就绪" value={acmeStatus?.ready ? "已就绪" : "未就绪"} description="需要账号私钥、目录 URL 和条款确认。" />
-          <SummaryCard title="商业模块" value="未启用" description="没有多用户、SSO、Agent、订阅、支付、公告和兑换。" />
-        </div>
-
-        {resourcesError ? <InlineAlert status="danger" title={resourcesError} /> : null}
-        {resourcesLoading ? (
-          <Card className="items-center gap-3 p-6 text-center">
-            <Spinner />
-            <Card.Description>正在加载 DNS 账号与证书申请记录。</Card.Description>
-          </Card>
-        ) : (
-          <div className="grid gap-6">
-            <ACMEStatusPanel status={acmeStatus} onUpdated={setACMEStatus} />
-            <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-              <DNSAccountsPanel
-                accounts={dnsAccounts}
-                onCreated={(account) => setDNSAccounts((current) => [account, ...current])}
-                onUpdated={(account) => setDNSAccounts((current) => current.map((item) => item.id === account.id ? account : item))}
-                onDeleted={(accountID) => setDNSAccounts((current) => current.filter((account) => account.id !== accountID))}
-              />
-              <CertificateApplicationsPanel
-                applications={applications}
-                acmeStatus={acmeStatus}
-                dnsAccounts={dnsAccounts}
-                onCreated={(application) => setApplications((current) => [application, ...current])}
-                onUpdated={(application) => setApplications((current) => current.map((item) => item.id === application.id ? application : item))}
-                onDeleted={(applicationID) => setApplications((current) => current.filter((application) => application.id !== applicationID))}
-              />
-            </div>
-          </div>
-        )}
-
-        <Card className="p-6">
-          <Card.Header>
-            <Card.Title>实现边界</Card.Title>
-            <Card.Description>个人版当前完成 DNS 账号和证书申请基础闭环，后续再接入真实 ACME 签发与 DNS 提供商适配。</Card.Description>
-          </Card.Header>
-          <Card.Content>
-            <InlineAlert status="accent" title="当前是干净个人版实现" description="本仓库没有引入商业化后端、SSO/OIDC、Agent、订阅、支付、公告或兑换模块。" />
-          </Card.Content>
+    <DashboardShell
+      activeItemID={activeSection}
+      createdAt={createdAt}
+      description={activeSectionMeta.description}
+      eyebrow="个人版控制台"
+      logoutPending={pending}
+      navigationItems={navigationItems}
+      title={activeSectionMeta.title}
+      userEmail={user.email}
+      userName={user.username}
+      onLogout={logout}
+      onNavigate={navigateDashboardSection}
+    >
+      {resourcesError ? <InlineAlert status="danger" title={resourcesError} /> : null}
+      {resourcesLoading ? (
+        <Card className="items-center gap-3 p-6 text-center">
+          <Spinner />
+          <Card.Description>正在加载 DNS 账号与证书申请记录。</Card.Description>
         </Card>
-      </section>
-    </main>
+      ) : (
+        <DashboardSectionContent
+          activeSection={activeSection}
+          acmeStatus={acmeStatus}
+          applications={applications}
+          dnsAccounts={dnsAccounts}
+          onACMEStatusUpdated={setACMEStatus}
+          onCertificateApplicationCreated={(application) => setApplications((current) => [application, ...current])}
+          onCertificateApplicationDeleted={(applicationID) => setApplications((current) => current.filter((application) => application.id !== applicationID))}
+          onCertificateApplicationUpdated={(application) => setApplications((current) => current.map((item) => item.id === application.id ? application : item))}
+          onDNSAccountCreated={(account) => setDNSAccounts((current) => [account, ...current])}
+          onDNSAccountDeleted={(accountID) => setDNSAccounts((current) => current.filter((account) => account.id !== accountID))}
+          onDNSAccountUpdated={(account) => setDNSAccounts((current) => current.map((item) => item.id === account.id ? account : item))}
+        />
+      )}
+    </DashboardShell>
+  );
+}
+
+type DashboardSectionContentProps = {
+  activeSection: DashboardSection;
+  acmeStatus: ACMEStatus | null;
+  applications: CertificateApplication[];
+  dnsAccounts: DNSAccount[];
+  onACMEStatusUpdated: (status: ACMEStatus) => void;
+  onCertificateApplicationCreated: (application: CertificateApplication) => void;
+  onCertificateApplicationDeleted: (applicationID: string) => void;
+  onCertificateApplicationUpdated: (application: CertificateApplication) => void;
+  onDNSAccountCreated: (account: DNSAccount) => void;
+  onDNSAccountDeleted: (accountID: string) => void;
+  onDNSAccountUpdated: (account: DNSAccount) => void;
+};
+
+function DashboardSectionContent({
+  activeSection,
+  acmeStatus,
+  applications,
+  dnsAccounts,
+  onACMEStatusUpdated,
+  onCertificateApplicationCreated,
+  onCertificateApplicationDeleted,
+  onCertificateApplicationUpdated,
+  onDNSAccountCreated,
+  onDNSAccountDeleted,
+  onDNSAccountUpdated
+}: DashboardSectionContentProps) {
+  if (activeSection === "acme") {
+    return <ACMEStatusPanel status={acmeStatus} onUpdated={onACMEStatusUpdated} />;
+  }
+
+  if (activeSection === "dns") {
+    return (
+      <DNSAccountsPanel
+        accounts={dnsAccounts}
+        onCreated={onDNSAccountCreated}
+        onDeleted={onDNSAccountDeleted}
+        onUpdated={onDNSAccountUpdated}
+      />
+    );
+  }
+
+  if (activeSection === "certificates") {
+    return (
+      <CertificateApplicationsPanel
+        acmeStatus={acmeStatus}
+        applications={applications}
+        dnsAccounts={dnsAccounts}
+        onCreated={onCertificateApplicationCreated}
+        onDeleted={onCertificateApplicationDeleted}
+        onUpdated={onCertificateApplicationUpdated}
+      />
+    );
+  }
+
+  return <DashboardOverview acmeStatus={acmeStatus} applications={applications} dnsAccounts={dnsAccounts} />;
+}
+
+function DashboardOverview({ acmeStatus, applications, dnsAccounts }: {
+  acmeStatus: ACMEStatus | null;
+  applications: CertificateApplication[];
+  dnsAccounts: DNSAccount[];
+}) {
+  return (
+    <>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard title="DNS 账号" value={`${dnsAccounts.length} 个`} description="本地加密保存 DNS API 凭据，接口响应不返回 SecretKey。" />
+        <SummaryCard title="证书申请" value={`${applications.length} 条`} description="建立申请记录后可创建 ACME order，challenge mode 固定为 dns-01。" />
+        <SummaryCard title="ACME 就绪" value={acmeStatus?.ready ? "已就绪" : "未就绪"} description="需要账号私钥、目录 URL 和条款确认。" />
+        <SummaryCard title="商业模块" value="未启用" description="没有多用户、SSO、Agent、订阅、支付、公告和兑换。" />
+      </div>
+
+      <Card className="p-6">
+        <Card.Header>
+          <Card.Title>实现边界</Card.Title>
+          <Card.Description>个人版当前完成 DNS 账号和证书申请基础闭环，后续再接入真实 ACME 签发与 DNS 提供商适配。</Card.Description>
+        </Card.Header>
+        <Card.Content>
+          <InlineAlert status="accent" title="当前是干净个人版实现" description="本仓库没有引入商业化后端、SSO/OIDC、Agent、订阅、支付、公告或兑换模块。" />
+        </Card.Content>
+      </Card>
+    </>
   );
 }
 
@@ -1143,6 +1266,11 @@ function formatDateTime(value: string) {
 
 function normalizeRoute(pathname: string): Route {
   return routeSet.has(pathname as Route) ? (pathname as Route) : "/";
+}
+
+function getDashboardSectionFromLocation(): DashboardSection {
+  const section = window.location.hash.replace(/^#/, "");
+  return dashboardSectionSet.has(section as DashboardSection) ? (section as DashboardSection) : "overview";
 }
 
 function errorMessage(err: unknown, fallback: string) {
