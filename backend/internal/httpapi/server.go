@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PearsSauce/Tqqssl/backend/internal/acmeaccount"
 	"github.com/PearsSauce/Tqqssl/backend/internal/auth"
 	"github.com/PearsSauce/Tqqssl/backend/internal/config"
 	"github.com/PearsSauce/Tqqssl/backend/internal/id"
@@ -20,10 +21,11 @@ import (
 const sessionCookieName = "tqqssl_personal_session"
 
 type Server struct {
-	cfg       config.Config
-	store     *store.Store
-	secretBox *secretbox.Box
-	logger    *slog.Logger
+	cfg            config.Config
+	store          *store.Store
+	secretBox      *secretbox.Box
+	acmeAccountKey *acmeaccount.AccountKey
+	logger         *slog.Logger
 }
 
 type UserDTO struct {
@@ -36,14 +38,22 @@ type UserDTO struct {
 	LastLoginAt *time.Time `json:"lastLoginAt,omitempty"`
 }
 
-func New(cfg config.Config, st *store.Store, secretBox *secretbox.Box, logger *slog.Logger) *Server {
+type ACMEStatusDTO struct {
+	AccountKeyReady bool   `json:"accountKeyReady"`
+	AccountKeyType  string `json:"accountKeyType,omitempty"`
+	DirectoryURL    string `json:"directoryUrl,omitempty"`
+	TermsAgreed     bool   `json:"termsAgreed"`
+	Ready           bool   `json:"ready"`
+}
+
+func New(cfg config.Config, st *store.Store, secretBox *secretbox.Box, acmeAccountKey *acmeaccount.AccountKey, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if secretBox == nil {
 		panic("secret box is required")
 	}
-	return &Server{cfg: cfg, store: st, secretBox: secretBox, logger: logger}
+	return &Server{cfg: cfg, store: st, secretBox: secretBox, acmeAccountKey: acmeAccountKey, logger: logger}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -55,6 +65,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/v1/auth/me", s.me)
+	mux.HandleFunc("GET /api/v1/acme/status", s.requireAuth(s.acmeStatus))
 	mux.HandleFunc("GET /api/v1/dns-accounts", s.requireAuth(s.listDNSAccounts))
 	mux.HandleFunc("POST /api/v1/dns-accounts", s.requireAuth(s.createDNSAccount))
 	mux.HandleFunc("PATCH /api/v1/dns-accounts/{id}", s.requireAuth(s.updateDNSAccount))
@@ -183,6 +194,19 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toUserDTO(user))
+}
+
+func (s *Server) acmeStatus(w http.ResponseWriter, _ *http.Request, _ store.User) {
+	status := ACMEStatusDTO{
+		AccountKeyReady: s.acmeAccountKey != nil,
+		DirectoryURL:    s.cfg.ACMEDirectoryURL,
+		TermsAgreed:     s.cfg.ACMETermsAgreed,
+	}
+	if s.acmeAccountKey != nil {
+		status.AccountKeyType = s.acmeAccountKey.Type()
+	}
+	status.Ready = status.AccountKeyReady && status.DirectoryURL != "" && status.TermsAgreed
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) currentUser(r *http.Request) (store.User, bool) {

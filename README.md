@@ -27,6 +27,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - DNS 账号元数据更新和 SecretKey 轮换
 - DNS 账号 SecretKey 使用本地密钥文件加密后写入数据文件，API 响应不返回明文
 - ACME 账号私钥自动生成和加载，为后续真实签发做准备
+- ACME 就绪状态查询，展示账号私钥、目录 URL 和条款确认状态
 - 证书申请记录创建、列表和删除
 - 证书申请预检查，不创建记录即可返回规范化域名、DNS 账号和提示
 - 证书申请域名基础校验、SAN 去重和小写规范化
@@ -92,6 +93,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 | `POST` | `/api/v1/auth/login` | 用户名或邮箱登录 |
 | `POST` | `/api/v1/auth/logout` | 删除当前服务端会话 |
 | `GET` | `/api/v1/auth/me` | 查询当前登录用户 |
+| `GET` | `/api/v1/acme/status` | 查询 ACME 前置配置就绪状态 |
 | `GET` | `/api/v1/dns-accounts` | 查询 DNS 账号列表 |
 | `POST` | `/api/v1/dns-accounts` | 创建 DNS 账号 |
 | `PATCH` | `/api/v1/dns-accounts/{id}` | 更新 DNS 账号元数据，可选轮换 SecretKey |
@@ -156,6 +158,8 @@ http://localhost:5173
 | `TQQSSL_DATA_FILE` | `data/tqqssl-personal.json` | 用户、会话、DNS 账号和证书申请数据文件 |
 | `TQQSSL_SECRET_KEY_FILE` | `data/tqqssl-personal.key` | DNS SecretKey 本地加密密钥文件 |
 | `TQQSSL_ACME_ACCOUNT_KEY_FILE` | `data/acme-account.key` | ACME 账号 P-256 私钥文件 |
+| `TQQSSL_ACME_DIRECTORY_URL` | 空 | ACME directory URL；为空时不会标记 ACME 就绪 |
+| `TQQSSL_ACME_TERMS_AGREED` | `false` | 是否已确认 ACME 服务条款 |
 | `TQQSSL_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 允许的前端来源 |
 | `TQQSSL_SESSION_TTL_HOURS` | `24` | 会话有效期，单位为小时 |
 

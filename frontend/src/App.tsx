@@ -2,7 +2,7 @@ import { Alert, Button, Card, Description, FieldError, Form, Input, Label, Spinn
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError, apiRequest } from "./api";
-import type { CertificateApplication, CertificatePrecheck, DNSAccount, RegisterOptions, User } from "./types";
+import type { ACMEStatus, CertificateApplication, CertificatePrecheck, DNSAccount, RegisterOptions, User } from "./types";
 
 type AuthResponse = {
   user: User;
@@ -262,6 +262,7 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
   const [pending, setPending] = useState(false);
   const [dnsAccounts, setDNSAccounts] = useState<DNSAccount[]>([]);
   const [applications, setApplications] = useState<CertificateApplication[]>([]);
+  const [acmeStatus, setACMEStatus] = useState<ACMEStatus | null>(null);
   const [resourcesLoading, setResourcesLoading] = useState(true);
   const [resourcesError, setResourcesError] = useState("");
 
@@ -271,13 +272,15 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
       setResourcesLoading(true);
       setResourcesError("");
       try {
-        const [nextDNSAccounts, nextApplications] = await Promise.all([
+        const [nextDNSAccounts, nextApplications, nextACMEStatus] = await Promise.all([
           apiRequest<DNSAccount[]>("/dns-accounts"),
-          apiRequest<CertificateApplication[]>("/certificates/applications")
+          apiRequest<CertificateApplication[]>("/certificates/applications"),
+          apiRequest<ACMEStatus>("/acme/status")
         ]);
         if (!cancelled) {
           setDNSAccounts(nextDNSAccounts);
           setApplications(nextApplications);
+          setACMEStatus(nextACMEStatus);
         }
       } catch (err) {
         if (!cancelled) {
@@ -316,9 +319,10 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
           </Button>
         </header>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <SummaryCard title="DNS 账号" value={`${dnsAccounts.length} 个`} description="本地加密保存 DNS API 凭据，接口响应不返回 SecretKey。" />
           <SummaryCard title="证书申请" value={`${applications.length} 条`} description="当前建立申请记录，challenge mode 固定为 dns-01。" />
+          <SummaryCard title="ACME 就绪" value={acmeStatus?.ready ? "已就绪" : "未就绪"} description="需要账号私钥、目录 URL 和条款确认。" />
           <SummaryCard title="商业模块" value="未启用" description="没有多用户、SSO、Agent、订阅、支付、公告和兑换。" />
         </div>
 
@@ -329,19 +333,22 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
             <Card.Description>正在加载 DNS 账号与证书申请记录。</Card.Description>
           </Card>
         ) : (
-          <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-            <DNSAccountsPanel
-              accounts={dnsAccounts}
-              onCreated={(account) => setDNSAccounts((current) => [account, ...current])}
-              onUpdated={(account) => setDNSAccounts((current) => current.map((item) => item.id === account.id ? account : item))}
-              onDeleted={(accountID) => setDNSAccounts((current) => current.filter((account) => account.id !== accountID))}
-            />
-            <CertificateApplicationsPanel
-              applications={applications}
-              dnsAccounts={dnsAccounts}
-              onCreated={(application) => setApplications((current) => [application, ...current])}
-              onDeleted={(applicationID) => setApplications((current) => current.filter((application) => application.id !== applicationID))}
-            />
+          <div className="grid gap-6">
+            <ACMEStatusPanel status={acmeStatus} />
+            <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+              <DNSAccountsPanel
+                accounts={dnsAccounts}
+                onCreated={(account) => setDNSAccounts((current) => [account, ...current])}
+                onUpdated={(account) => setDNSAccounts((current) => current.map((item) => item.id === account.id ? account : item))}
+                onDeleted={(accountID) => setDNSAccounts((current) => current.filter((account) => account.id !== accountID))}
+              />
+              <CertificateApplicationsPanel
+                applications={applications}
+                dnsAccounts={dnsAccounts}
+                onCreated={(application) => setApplications((current) => [application, ...current])}
+                onDeleted={(applicationID) => setApplications((current) => current.filter((application) => application.id !== applicationID))}
+              />
+            </div>
           </div>
         )}
 
@@ -356,6 +363,44 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
         </Card>
       </section>
     </main>
+  );
+}
+
+function ACMEStatusPanel({ status }: { status: ACMEStatus | null }) {
+  if (!status) {
+    return null;
+  }
+  const checks = [
+    { label: "ACME 账号私钥", passed: status.accountKeyReady, detail: status.accountKeyType || "未加载" },
+    { label: "目录 URL", passed: Boolean(status.directoryUrl), detail: status.directoryUrl || "未配置 TQQSSL_ACME_DIRECTORY_URL" },
+    { label: "条款确认", passed: status.termsAgreed, detail: status.termsAgreed ? "已确认" : "未配置 TQQSSL_ACME_TERMS_AGREED=true" }
+  ];
+
+  return (
+    <Card className="p-6">
+      <Card.Header>
+        <Card.Title>ACME 就绪状态</Card.Title>
+        <Card.Description>当前只展示签发前置条件，不会输出 ACME 私钥路径或私钥内容。</Card.Description>
+      </Card.Header>
+      <Card.Content className="grid gap-4">
+        <InlineAlert
+          status={status.ready ? "accent" : "danger"}
+          title={status.ready ? "ACME 基础配置已就绪" : "ACME 基础配置未完成"}
+          description={status.ready ? "后续可以继续接入 ACME 账号注册和证书订单流程。" : "需要补齐目录 URL 和服务条款确认后再接入真实签发。"}
+        />
+        <div className="grid gap-3 md:grid-cols-3">
+          {checks.map((check) => (
+            <div key={check.label} className="rounded-3xl border border-slate-200/80 bg-slate-50/80 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-medium text-slate-950">{check.label}</div>
+                <StatusPill>{check.passed ? "通过" : "待配置"}</StatusPill>
+              </div>
+              <div className="mt-2 break-all text-sm leading-6 text-slate-500">{check.detail}</div>
+            </div>
+          ))}
+        </div>
+      </Card.Content>
+    </Card>
   );
 }
 

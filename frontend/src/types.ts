@@ -45,3 +45,11 @@ export type CertificatePrecheck = {
   domainCount: number;
   warnings: string[];
 };
+
+export type ACMEStatus = {
+  accountKeyReady: boolean;
+  accountKeyType?: string;
+  directoryUrl?: string;
+  termsAgreed: boolean;
+  ready: boolean;
+};

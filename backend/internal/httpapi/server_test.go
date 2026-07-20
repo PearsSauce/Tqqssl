@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PearsSauce/Tqqssl/backend/internal/acmeaccount"
 	"github.com/PearsSauce/Tqqssl/backend/internal/config"
 	"github.com/PearsSauce/Tqqssl/backend/internal/secretbox"
 	"github.com/PearsSauce/Tqqssl/backend/internal/store"
@@ -101,6 +102,34 @@ func TestAuthRejectsWeakPasswordAndBadLogin(t *testing.T) {
 	}`, nil)
 	if loginRec.Code != http.StatusUnauthorized {
 		t.Fatalf("bad login = %d %s, want 401", loginRec.Code, loginRec.Body.String())
+	}
+}
+
+func TestACMEStatusRequiresAuthAndReportsReadiness(t *testing.T) {
+	handler := newTestHandler(t)
+
+	unauthorizedRec := request(handler, http.MethodGet, "/api/v1/acme/status", "", nil)
+	if unauthorizedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized acme status = %d %s, want 401", unauthorizedRec.Code, unauthorizedRec.Body.String())
+	}
+
+	cookie := registerAdmin(t, handler)
+	statusRec := requestWithCookie(handler, http.MethodGet, "/api/v1/acme/status", "", cookie)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("acme status = %d %s", statusRec.Code, statusRec.Body.String())
+	}
+	var status ACMEStatusDTO
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.AccountKeyReady || status.AccountKeyType != "ECDSA P-256" || !status.TermsAgreed || !status.Ready {
+		t.Fatalf("unexpected acme status: %#v", status)
+	}
+	if status.DirectoryURL != "https://acme.example.test/directory" {
+		t.Fatalf("directory url = %q", status.DirectoryURL)
+	}
+	if strings.Contains(statusRec.Body.String(), "key_file") || strings.Contains(statusRec.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("acme status leaked sensitive key material: %s", statusRec.Body.String())
 	}
 }
 
@@ -260,6 +289,7 @@ func newTestHandlerWithData(t *testing.T) (http.Handler, string) {
 	dir := t.TempDir()
 	dataFile := filepath.Join(dir, "store.json")
 	keyFile := filepath.Join(dir, "secret.key")
+	acmeKeyFile := filepath.Join(dir, "acme-account.key")
 	st, err := store.Open(dataFile)
 	if err != nil {
 		t.Fatal(err)
@@ -268,7 +298,18 @@ func newTestHandlerWithData(t *testing.T) (http.Handler, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	api := New(config.Config{FrontendOrigin: "https://app.example.test", SecretKeyFile: keyFile, SessionTTL: time.Hour}, st, box, nil)
+	acmeAccountKey, err := acmeaccount.Open(acmeKeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := New(config.Config{
+		FrontendOrigin:     "https://app.example.test",
+		SecretKeyFile:      keyFile,
+		ACMEAccountKeyFile: acmeKeyFile,
+		ACMEDirectoryURL:   "https://acme.example.test/directory",
+		ACMETermsAgreed:    true,
+		SessionTTL:         time.Hour,
+	}, st, box, acmeAccountKey, nil)
 	return api.Routes(), dataFile
 }
 

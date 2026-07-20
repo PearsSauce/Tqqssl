@@ -43,7 +43,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	api := httpapi.New(cfg, st, box, logger)
+	api := httpapi.New(cfg, st, box, accountKey, logger)
 	logger.Info("starting tqqssl personal api", "addr", cfg.Addr, "data_file", cfg.DataFile)
 	if err := httpapi.ListenAndServe(ctx, cfg, api.Routes()); err != nil {
 		logger.Error("api stopped", "error", err)
