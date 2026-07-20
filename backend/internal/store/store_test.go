@@ -131,6 +131,60 @@ func TestDeleteCertificateApplicationUnblocksDNSAccountDeletion(t *testing.T) {
 	}
 }
 
+func TestSaveCertificateApplicationOrder(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "store.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := st.CreateDNSAccount(DNSAccount{
+		ID:        "dns",
+		Name:      "dns",
+		Provider:  "alidns",
+		SecretKey: "enc:v1:dns",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateCertificateApplication(CertificateApplication{
+		ID:            "cert",
+		PrimaryDomain: "example.com",
+		SANs:          []string{"www.example.com"},
+		DNSAccountID:  "dns",
+		ChallengeMode: "dns-01",
+		Status:        "pending",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updatedAt := now.Add(time.Minute)
+	application, err := st.SaveCertificateApplicationOrder("cert", "ordered", CertificateOrder{
+		OrderURL:          "https://acme.example.test/order/1",
+		OrderStatus:       "pending",
+		AuthorizationURLs: []string{"https://acme.example.test/authz/1"},
+		FinalizeURL:       "https://acme.example.test/finalize/1",
+	}, updatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if application.Status != "ordered" || application.OrderURL == "" || application.OrderStatus != "pending" || application.FinalizeURL == "" {
+		t.Fatalf("unexpected ordered application: %#v", application)
+	}
+	if len(application.AuthorizationURLs) != 1 || application.AuthorizationURLs[0] != "https://acme.example.test/authz/1" {
+		t.Fatalf("unexpected authorization urls: %#v", application.AuthorizationURLs)
+	}
+	application.AuthorizationURLs[0] = "mutated"
+	loaded, err := st.GetCertificateApplication("cert")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.AuthorizationURLs[0] != "https://acme.example.test/authz/1" {
+		t.Fatalf("authorization urls should be copied: %#v", loaded.AuthorizationURLs)
+	}
+}
+
 func TestSaveAndGetACMEAccount(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "store.json"))
 	if err != nil {

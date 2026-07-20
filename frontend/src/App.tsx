@@ -321,7 +321,7 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
 
         <div className="grid gap-4 md:grid-cols-4">
           <SummaryCard title="DNS 账号" value={`${dnsAccounts.length} 个`} description="本地加密保存 DNS API 凭据，接口响应不返回 SecretKey。" />
-          <SummaryCard title="证书申请" value={`${applications.length} 条`} description="当前建立申请记录，challenge mode 固定为 dns-01。" />
+          <SummaryCard title="证书申请" value={`${applications.length} 条`} description="建立申请记录后可创建 ACME order，challenge mode 固定为 dns-01。" />
           <SummaryCard title="ACME 就绪" value={acmeStatus?.ready ? "已就绪" : "未就绪"} description="需要账号私钥、目录 URL 和条款确认。" />
           <SummaryCard title="商业模块" value="未启用" description="没有多用户、SSO、Agent、订阅、支付、公告和兑换。" />
         </div>
@@ -344,8 +344,10 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
               />
               <CertificateApplicationsPanel
                 applications={applications}
+                acmeStatus={acmeStatus}
                 dnsAccounts={dnsAccounts}
                 onCreated={(application) => setApplications((current) => [application, ...current])}
+                onUpdated={(application) => setApplications((current) => current.map((item) => item.id === application.id ? application : item))}
                 onDeleted={(applicationID) => setApplications((current) => current.filter((application) => application.id !== applicationID))}
               />
             </div>
@@ -763,10 +765,12 @@ function DNSAccountsPanel({ accounts, onCreated, onUpdated, onDeleted }: {
   );
 }
 
-function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, onDeleted }: {
+function CertificateApplicationsPanel({ applications, acmeStatus, dnsAccounts, onCreated, onUpdated, onDeleted }: {
   applications: CertificateApplication[];
+  acmeStatus: ACMEStatus | null;
   dnsAccounts: DNSAccount[];
   onCreated: (application: CertificateApplication) => void;
+  onUpdated: (application: CertificateApplication) => void;
   onDeleted: (applicationID: string) => void;
 }) {
   const [primaryDomain, setPrimaryDomain] = useState("");
@@ -774,6 +778,7 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
   const [selectedDNSAccountID, setSelectedDNSAccountID] = useState("");
   const [pending, setPending] = useState(false);
   const [prechecking, setPrechecking] = useState(false);
+  const [orderingID, setOrderingID] = useState("");
   const [precheck, setPrecheck] = useState<CertificatePrecheck | null>(null);
   const [deletingID, setDeletingID] = useState("");
   const [error, setError] = useState("");
@@ -849,6 +854,19 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
     }
   }
 
+  async function createACMEOrder(applicationID: string) {
+    setOrderingID(applicationID);
+    setError("");
+    try {
+      const application = await apiRequest<CertificateApplication>(`/certificates/applications/${applicationID}/acme/order`, { method: "POST" });
+      onUpdated(application);
+    } catch (err) {
+      setError(errorMessage(err, "创建 ACME order 失败"));
+    } finally {
+      setOrderingID("");
+    }
+  }
+
   return (
     <Card className="gap-6 p-6">
       <Card.Header>
@@ -865,6 +883,7 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
         >
           {error ? <InlineAlert status="danger" title={error} /> : null}
           {dnsAccounts.length === 0 ? <InlineAlert status="accent" title="需要先创建 DNS 账号" description="证书申请会校验 DNS 账号是否存在。" /> : null}
+          {!acmeStatus?.accountRegistered ? <InlineAlert status="accent" title="ACME 账号未注册" description="证书申请可以先保存；创建 ACME order 前需要先注册 ACME 账号。" /> : null}
           <TextField isRequired fullWidth name="primaryDomain" value={primaryDomain} onChange={setPrimaryDomain}>
             <Label>主域名</Label>
             <Input placeholder="example.com 或 *.example.com" />
@@ -928,10 +947,12 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="font-medium text-slate-950">{application.primaryDomain}</div>
                       <StatusPill>{application.status}</StatusPill>
+                      {application.orderStatus ? <StatusPill>order {application.orderStatus}</StatusPill> : null}
                     </div>
                     <div className="mt-2 text-sm text-slate-500">
                       DNS：{application.dnsAccountName || application.dnsAccountId} · Challenge：{application.challengeMode}
                     </div>
+                    {application.orderUrl ? <CertificateOrderDetails application={application} /> : null}
                     {application.sans.length > 0 ? (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {application.sans.map((domain) => (
@@ -942,6 +963,14 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
                   </div>
                   <div className="flex flex-col items-start gap-2 md:items-end">
                     <div className="text-xs text-slate-400">{formatDateTime(application.createdAt)}</div>
+                    <Button
+                      isDisabled={!acmeStatus?.accountRegistered || Boolean(application.orderUrl)}
+                      isPending={orderingID === application.id}
+                      variant="secondary"
+                      onPress={() => void createACMEOrder(application.id)}
+                    >
+                      {({ isPending }) => <>{isPending ? <Spinner color="current" size="sm" /> : null}{application.orderUrl ? "ACME Order 已创建" : "创建 ACME Order"}</>}
+                    </Button>
                     <Button
                       variant="secondary"
                       isPending={deletingID === application.id}
@@ -957,6 +986,24 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
         </div>
       </Card.Content>
     </Card>
+  );
+}
+
+function CertificateOrderDetails({ application }: { application: CertificateApplication }) {
+  const rows = [
+    { label: "Order URL", value: application.orderUrl },
+    { label: "Finalize URL", value: application.finalizeUrl },
+    { label: "Authorization", value: application.authorizationUrls?.join("\n") }
+  ].filter((row) => row.value);
+  return (
+    <div className="mt-3 grid gap-2 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-slate-600">
+      {rows.map((row) => (
+        <div key={row.label} className="grid gap-1">
+          <div className="font-medium text-slate-700">{row.label}</div>
+          <div className="whitespace-pre-wrap break-all">{row.value}</div>
+        </div>
+      ))}
+    </div>
   );
 }
 

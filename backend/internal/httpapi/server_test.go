@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -286,6 +287,124 @@ func TestRegisterACMEAccountReturnsPersistedStatus(t *testing.T) {
 	}
 	if !registered.AccountRegistered || registered.AccountURL != "https://acme.example.test/account/1" || registered.ContactEmail != "admin@example.test" || registered.AccountStatus != "valid" {
 		t.Fatalf("unexpected existing register response: %#v", registered)
+	}
+}
+
+func TestCreateCertificateACMEOrderPersistsOrderStatus(t *testing.T) {
+	var baseURL string
+	var receivedOrderEnvelope struct {
+		Protected string `json:"protected"`
+		Payload   string `json:"payload"`
+		Signature string `json:"signature"`
+	}
+	acmeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/directory":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"newNonce":"` + baseURL + `/new-nonce",
+				"newAccount":"` + baseURL + `/new-account",
+				"newOrder":"` + baseURL + `/new-order",
+				"meta":{"termsOfService":"` + baseURL + `/terms"}
+			}`))
+		case "/new-nonce":
+			w.Header().Set("Replay-Nonce", "order-test-nonce")
+			w.WriteHeader(http.StatusNoContent)
+		case "/new-account":
+			w.Header().Set("Location", baseURL+"/account/1")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"status":"valid"}`))
+		case "/new-order":
+			if r.Method != http.MethodPost {
+				t.Fatalf("new order method = %s, want POST", r.Method)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&receivedOrderEnvelope); err != nil {
+				t.Fatal(err)
+			}
+			w.Header().Set("Location", baseURL+"/order/1")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{
+				"status":"pending",
+				"authorizations":["` + baseURL + `/authz/1","` + baseURL + `/authz/2"],
+				"finalize":"` + baseURL + `/finalize/1"
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer acmeServer.Close()
+	baseURL = acmeServer.URL
+	handler, _ := newTestHandlerWithDirectory(t, acmeServer.URL+"/directory")
+	cookie := registerAdmin(t, handler)
+	createDNSRec := requestWithCookie(handler, http.MethodPost, "/api/v1/dns-accounts", `{
+		"name":"AliDNS 主账号",
+		"provider":"alidns",
+		"accessKey":"AKIDEXAMPLE1234567890",
+		"secretKey":"VerySecretValueShouldNotLeak"
+	}`, cookie)
+	if createDNSRec.Code != http.StatusCreated {
+		t.Fatalf("create dns account = %d %s", createDNSRec.Code, createDNSRec.Body.String())
+	}
+	var dnsAccount DNSAccountDTO
+	if err := json.Unmarshal(createDNSRec.Body.Bytes(), &dnsAccount); err != nil {
+		t.Fatal(err)
+	}
+	createCertificateRec := requestWithCookie(handler, http.MethodPost, "/api/v1/certificates/applications", `{
+		"primaryDomain":"example.com",
+		"sans":["www.example.com"],
+		"dnsAccountId":"`+dnsAccount.ID+`",
+		"challengeMode":"dns-01"
+	}`, cookie)
+	if createCertificateRec.Code != http.StatusCreated {
+		t.Fatalf("create certificate application = %d %s", createCertificateRec.Code, createCertificateRec.Body.String())
+	}
+	var application CertificateApplicationDTO
+	if err := json.Unmarshal(createCertificateRec.Body.Bytes(), &application); err != nil {
+		t.Fatal(err)
+	}
+	withoutAccountRec := requestWithCookie(handler, http.MethodPost, "/api/v1/certificates/applications/"+application.ID+"/acme/order", "", cookie)
+	if withoutAccountRec.Code != http.StatusConflict {
+		t.Fatalf("order without acme account = %d %s, want 409", withoutAccountRec.Code, withoutAccountRec.Body.String())
+	}
+	registerRec := requestWithCookie(handler, http.MethodPost, "/api/v1/acme/account/register", "{}", cookie)
+	if registerRec.Code != http.StatusOK {
+		t.Fatalf("register acme account = %d %s", registerRec.Code, registerRec.Body.String())
+	}
+
+	orderRec := requestWithCookie(handler, http.MethodPost, "/api/v1/certificates/applications/"+application.ID+"/acme/order", "", cookie)
+	if orderRec.Code != http.StatusOK {
+		t.Fatalf("create acme order = %d %s", orderRec.Code, orderRec.Body.String())
+	}
+	if strings.Contains(orderRec.Body.String(), "PRIVATE KEY") || strings.Contains(orderRec.Body.String(), "secretKey") {
+		t.Fatalf("order response leaked sensitive data: %s", orderRec.Body.String())
+	}
+	var ordered CertificateApplicationDTO
+	if err := json.Unmarshal(orderRec.Body.Bytes(), &ordered); err != nil {
+		t.Fatal(err)
+	}
+	if ordered.Status != certificateOrdered || ordered.OrderStatus != "pending" || ordered.OrderURL != acmeServer.URL+"/order/1" || ordered.FinalizeURL != acmeServer.URL+"/finalize/1" {
+		t.Fatalf("unexpected ordered dto: %#v", ordered)
+	}
+	if len(ordered.AuthorizationURLs) != 2 || ordered.AuthorizationURLs[0] != acmeServer.URL+"/authz/1" || ordered.AuthorizationURLs[1] != acmeServer.URL+"/authz/2" {
+		t.Fatalf("unexpected ordered authz urls: %#v", ordered.AuthorizationURLs)
+	}
+	protectedJSON, err := base64.RawURLEncoding.DecodeString(receivedOrderEnvelope.Protected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protected := string(protectedJSON)
+	if !strings.Contains(protected, `"kid":"`+acmeServer.URL+`/account/1"`) || strings.Contains(protected, `"jwk"`) {
+		t.Fatalf("unexpected order protected header: %s", protected)
+	}
+	payloadJSON, err := base64.RawURLEncoding.DecodeString(receivedOrderEnvelope.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := string(payloadJSON)
+	if !strings.Contains(payload, `"value":"example.com"`) || !strings.Contains(payload, `"value":"www.example.com"`) {
+		t.Fatalf("unexpected order payload: %s", payload)
 	}
 }
 

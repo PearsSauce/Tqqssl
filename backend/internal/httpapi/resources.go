@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/PearsSauce/Tqqssl/backend/internal/acmeorder"
 	"github.com/PearsSauce/Tqqssl/backend/internal/id"
 	"github.com/PearsSauce/Tqqssl/backend/internal/store"
 )
@@ -13,6 +15,7 @@ import (
 const (
 	challengeModeDNS01 = "dns-01"
 	certificatePending = "pending"
+	certificateOrdered = "ordered"
 )
 
 type DNSAccountDTO struct {
@@ -27,15 +30,19 @@ type DNSAccountDTO struct {
 }
 
 type CertificateApplicationDTO struct {
-	ID             string    `json:"id"`
-	PrimaryDomain  string    `json:"primaryDomain"`
-	SANs           []string  `json:"sans"`
-	DNSAccountID   string    `json:"dnsAccountId"`
-	DNSAccountName string    `json:"dnsAccountName,omitempty"`
-	ChallengeMode  string    `json:"challengeMode"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	ID                string    `json:"id"`
+	PrimaryDomain     string    `json:"primaryDomain"`
+	SANs              []string  `json:"sans"`
+	DNSAccountID      string    `json:"dnsAccountId"`
+	DNSAccountName    string    `json:"dnsAccountName,omitempty"`
+	ChallengeMode     string    `json:"challengeMode"`
+	Status            string    `json:"status"`
+	OrderURL          string    `json:"orderUrl,omitempty"`
+	OrderStatus       string    `json:"orderStatus,omitempty"`
+	AuthorizationURLs []string  `json:"authorizationUrls,omitempty"`
+	FinalizeURL       string    `json:"finalizeUrl,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 type CertificatePrecheckDTO struct {
@@ -305,6 +312,72 @@ func (s *Server) createCertificateApplication(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, toCertificateApplicationDTO(application, input.dnsAccount.Name))
 }
 
+func (s *Server) createCertificateACMEOrder(w http.ResponseWriter, r *http.Request, _ store.User) {
+	applicationID := strings.TrimSpace(r.PathValue("id"))
+	if applicationID == "" {
+		writeError(w, http.StatusBadRequest, "证书申请 ID 不能为空")
+		return
+	}
+	application, err := s.store.GetCertificateApplication(applicationID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "证书申请不存在")
+		return
+	}
+	if err != nil {
+		s.logger.Error("get certificate application failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "读取证书申请失败")
+		return
+	}
+	dnsAccount, err := s.store.GetDNSAccount(application.DNSAccountID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusBadRequest, "DNS 账号不存在")
+		return
+	}
+	if err != nil {
+		s.logger.Error("get dns account failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "读取 DNS 账号失败")
+		return
+	}
+	if strings.TrimSpace(application.OrderURL) != "" {
+		writeJSON(w, http.StatusOK, toCertificateApplicationDTO(application, dnsAccount.Name))
+		return
+	}
+	account, err := s.store.GetACMEAccount()
+	if errors.Is(err, store.ErrNotFound) || strings.TrimSpace(account.AccountURL) == "" {
+		writeError(w, http.StatusConflict, "需要先注册 ACME 账号")
+		return
+	}
+	if err != nil {
+		s.logger.Error("get acme account failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "读取 ACME 账号失败")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	result, err := acmeorder.Create(ctx, acmeorder.Request{
+		DirectoryURL: s.cfg.ACMEDirectoryURL,
+		AccountURL:   account.AccountURL,
+		AccountKey:   s.acmeAccountKey,
+		Domains:      certificateDomains(application),
+	}, nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	updated, err := s.store.SaveCertificateApplicationOrder(application.ID, certificateOrdered, store.CertificateOrder{
+		OrderURL:          result.OrderURL,
+		OrderStatus:       result.Status,
+		AuthorizationURLs: result.AuthorizationURLs,
+		FinalizeURL:       result.FinalizeURL,
+	}, time.Now().UTC())
+	if err != nil {
+		s.logger.Error("save certificate acme order failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "保存 ACME order 失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, toCertificateApplicationDTO(updated, dnsAccount.Name))
+}
+
 func (s *Server) deleteCertificateApplication(w http.ResponseWriter, r *http.Request, _ store.User) {
 	applicationID := strings.TrimSpace(r.PathValue("id"))
 	if applicationID == "" {
@@ -488,15 +561,19 @@ func toDNSAccountDTO(account store.DNSAccount) DNSAccountDTO {
 
 func toCertificateApplicationDTO(application store.CertificateApplication, dnsAccountName string) CertificateApplicationDTO {
 	return CertificateApplicationDTO{
-		ID:             application.ID,
-		PrimaryDomain:  application.PrimaryDomain,
-		SANs:           append([]string(nil), application.SANs...),
-		DNSAccountID:   application.DNSAccountID,
-		DNSAccountName: dnsAccountName,
-		ChallengeMode:  application.ChallengeMode,
-		Status:         application.Status,
-		CreatedAt:      application.CreatedAt,
-		UpdatedAt:      application.UpdatedAt,
+		ID:                application.ID,
+		PrimaryDomain:     application.PrimaryDomain,
+		SANs:              append([]string(nil), application.SANs...),
+		DNSAccountID:      application.DNSAccountID,
+		DNSAccountName:    dnsAccountName,
+		ChallengeMode:     application.ChallengeMode,
+		Status:            application.Status,
+		OrderURL:          application.OrderURL,
+		OrderStatus:       application.OrderStatus,
+		AuthorizationURLs: append([]string(nil), application.AuthorizationURLs...),
+		FinalizeURL:       application.FinalizeURL,
+		CreatedAt:         application.CreatedAt,
+		UpdatedAt:         application.UpdatedAt,
 	}
 }
 
@@ -529,6 +606,13 @@ func certificatePrecheckWarnings(primaryDomain string, sans []string) []string {
 		warnings = append(warnings, "检测到泛域名，后续签发必须使用 DNS-01 验证。")
 	}
 	return warnings
+}
+
+func certificateDomains(application store.CertificateApplication) []string {
+	domains := make([]string, 0, 1+len(application.SANs))
+	domains = append(domains, application.PrimaryDomain)
+	domains = append(domains, application.SANs...)
+	return domains
 }
 
 func maskValue(value string) string {

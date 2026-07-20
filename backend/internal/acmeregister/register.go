@@ -3,14 +3,9 @@ package acmeregister
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -18,6 +13,7 @@ import (
 
 	"github.com/PearsSauce/Tqqssl/backend/internal/acmeaccount"
 	"github.com/PearsSauce/Tqqssl/backend/internal/acmedirectory"
+	"github.com/PearsSauce/Tqqssl/backend/internal/acmejws"
 )
 
 type HTTPClient interface {
@@ -40,12 +36,6 @@ type Result struct {
 type directoryPayload struct {
 	TermsOfServiceAgreed bool     `json:"termsOfServiceAgreed"`
 	Contact              []string `json:"contact,omitempty"`
-}
-
-type jwsEnvelope struct {
-	Protected string `json:"protected"`
-	Payload   string `json:"payload"`
-	Signature string `json:"signature"`
 }
 
 func Register(ctx context.Context, req Request, client HTTPClient) (Result, error) {
@@ -76,11 +66,14 @@ func Register(ctx context.Context, req Request, client HTTPClient) (Result, erro
 	if directory.ExternalAccountRequired {
 		return Result{}, errors.New("该 ACME CA 要求 External Account Binding，当前个人版尚未实现")
 	}
-	nonce, err := getNonce(ctx, directory.NewNonce, client)
+	nonce, err := acmejws.FetchNonce(ctx, directory.NewNonce, client)
 	if err != nil {
 		return Result{}, err
 	}
-	envelope, err := newAccountJWS(req.AccountKey, directory.NewAccount, nonce, contactEmail)
+	envelope, err := acmejws.NewJWKEnvelope(req.AccountKey, directory.NewAccount, nonce, directoryPayload{
+		TermsOfServiceAgreed: true,
+		Contact:              []string{"mailto:" + contactEmail},
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -114,81 +107,4 @@ func Register(ctx context.Context, req Request, client HTTPClient) (Result, erro
 		status = strings.TrimSpace(payload.Status)
 	}
 	return Result{AccountURL: accountURL, ContactEmail: contactEmail, Status: status}, nil
-}
-
-func getNonce(ctx context.Context, nonceURL string, client HTTPClient) (string, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodHead, nonceURL, nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", fmt.Errorf("ACME newNonce 返回 HTTP %d", resp.StatusCode)
-	}
-	nonce := strings.TrimSpace(resp.Header.Get("Replay-Nonce"))
-	if nonce == "" {
-		return "", errors.New("ACME newNonce 响应缺少 Replay-Nonce")
-	}
-	return nonce, nil
-}
-
-func newAccountJWS(accountKey *acmeaccount.AccountKey, accountURL string, nonce string, contactEmail string) (jwsEnvelope, error) {
-	privateKey := accountKey.PrivateKey()
-	if privateKey == nil {
-		return jwsEnvelope{}, errors.New("ACME account key 未加载")
-	}
-	protected := map[string]any{
-		"alg":   "ES256",
-		"nonce": nonce,
-		"url":   accountURL,
-		"jwk":   jwk(privateKey),
-	}
-	payload := directoryPayload{
-		TermsOfServiceAgreed: true,
-		Contact:              []string{"mailto:" + contactEmail},
-	}
-	protectedJSON, err := json.Marshal(protected)
-	if err != nil {
-		return jwsEnvelope{}, err
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return jwsEnvelope{}, err
-	}
-	protected64 := base64.RawURLEncoding.EncodeToString(protectedJSON)
-	payload64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
-	digest := sha256.Sum256([]byte(protected64 + "." + payload64))
-	r, s, err := ecdsa.Sign(rand.Reader, privateKey, digest[:])
-	if err != nil {
-		return jwsEnvelope{}, err
-	}
-	signature := append(fixedBytes(r, 32), fixedBytes(s, 32)...)
-	return jwsEnvelope{
-		Protected: protected64,
-		Payload:   payload64,
-		Signature: base64.RawURLEncoding.EncodeToString(signature),
-	}, nil
-}
-
-func jwk(privateKey *ecdsa.PrivateKey) map[string]string {
-	return map[string]string{
-		"kty": "EC",
-		"crv": "P-256",
-		"x":   base64.RawURLEncoding.EncodeToString(fixedBytes(privateKey.X, 32)),
-		"y":   base64.RawURLEncoding.EncodeToString(fixedBytes(privateKey.Y, 32)),
-	}
-}
-
-func fixedBytes(value *big.Int, size int) []byte {
-	raw := value.Bytes()
-	if len(raw) >= size {
-		return raw[len(raw)-size:]
-	}
-	out := make([]byte, size)
-	copy(out[size-len(raw):], raw)
-	return out
 }

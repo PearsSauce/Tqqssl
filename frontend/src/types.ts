@@ -30,7 +30,11 @@ export type CertificateApplication = {
   dnsAccountId: string;
   dnsAccountName?: string;
   challengeMode: "dns-01";
-  status: "pending";
+  status: "pending" | "ordered";
+  orderUrl?: string;
+  orderStatus?: string;
+  authorizationUrls?: string[];
+  finalizeUrl?: string;
   createdAt: string;
   updatedAt: string;
 };

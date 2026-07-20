@@ -11,13 +11,14 @@ import (
 	"testing"
 
 	"github.com/PearsSauce/Tqqssl/backend/internal/acmeaccount"
+	"github.com/PearsSauce/Tqqssl/backend/internal/acmejws"
 )
 
 func TestRegisterCreatesACMEAccount(t *testing.T) {
 	var directoryURL string
 	var newNonceURL string
 	var newAccountURL string
-	var receivedEnvelope jwsEnvelope
+	var receivedEnvelope acmejws.Envelope
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/directory":

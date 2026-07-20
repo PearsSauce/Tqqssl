@@ -40,14 +40,25 @@ type DNSAccount struct {
 }
 
 type CertificateApplication struct {
-	ID            string    `json:"id"`
-	PrimaryDomain string    `json:"primaryDomain"`
-	SANs          []string  `json:"sans"`
-	DNSAccountID  string    `json:"dnsAccountId"`
-	ChallengeMode string    `json:"challengeMode"`
-	Status        string    `json:"status"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID                string    `json:"id"`
+	PrimaryDomain     string    `json:"primaryDomain"`
+	SANs              []string  `json:"sans"`
+	DNSAccountID      string    `json:"dnsAccountId"`
+	ChallengeMode     string    `json:"challengeMode"`
+	Status            string    `json:"status"`
+	OrderURL          string    `json:"orderUrl,omitempty"`
+	OrderStatus       string    `json:"orderStatus,omitempty"`
+	AuthorizationURLs []string  `json:"authorizationUrls,omitempty"`
+	FinalizeURL       string    `json:"finalizeUrl,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
+type CertificateOrder struct {
+	OrderURL          string
+	OrderStatus       string
+	AuthorizationURLs []string
+	FinalizeURL       string
 }
 
 type ACMEAccount struct {
@@ -306,9 +317,23 @@ func (s *Store) ListCertificateApplications() []CertificateApplication {
 	applications := make([]CertificateApplication, 0, len(s.doc.CertificateApplications))
 	for _, application := range s.doc.CertificateApplications {
 		application.SANs = append([]string(nil), application.SANs...)
+		application.AuthorizationURLs = append([]string(nil), application.AuthorizationURLs...)
 		applications = append(applications, application)
 	}
 	return applications
+}
+
+func (s *Store) GetCertificateApplication(id string) (CertificateApplication, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, application := range s.doc.CertificateApplications {
+		if application.ID == id {
+			application.SANs = append([]string(nil), application.SANs...)
+			application.AuthorizationURLs = append([]string(nil), application.AuthorizationURLs...)
+			return application, nil
+		}
+	}
+	return CertificateApplication{}, ErrNotFound
 }
 
 func (s *Store) CreateCertificateApplication(application CertificateApplication) (CertificateApplication, error) {
@@ -330,8 +355,29 @@ func (s *Store) CreateCertificateApplication(application CertificateApplication)
 		}
 	}
 	application.SANs = append([]string(nil), application.SANs...)
+	application.AuthorizationURLs = append([]string(nil), application.AuthorizationURLs...)
 	s.doc.CertificateApplications = append(s.doc.CertificateApplications, application)
 	return application, s.saveLocked()
+}
+
+func (s *Store) SaveCertificateApplicationOrder(id string, applicationStatus string, order CertificateOrder, now time.Time) (CertificateApplication, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.doc.CertificateApplications {
+		if s.doc.CertificateApplications[i].ID == id {
+			s.doc.CertificateApplications[i].Status = applicationStatus
+			s.doc.CertificateApplications[i].OrderURL = order.OrderURL
+			s.doc.CertificateApplications[i].OrderStatus = order.OrderStatus
+			s.doc.CertificateApplications[i].AuthorizationURLs = append([]string(nil), order.AuthorizationURLs...)
+			s.doc.CertificateApplications[i].FinalizeURL = order.FinalizeURL
+			s.doc.CertificateApplications[i].UpdatedAt = now
+			application := s.doc.CertificateApplications[i]
+			application.SANs = append([]string(nil), application.SANs...)
+			application.AuthorizationURLs = append([]string(nil), application.AuthorizationURLs...)
+			return application, s.saveLocked()
+		}
+	}
+	return CertificateApplication{}, ErrNotFound
 }
 
 func (s *Store) DeleteCertificateApplication(id string) error {
