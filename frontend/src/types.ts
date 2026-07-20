@@ -35,6 +35,8 @@ export type CertificateApplication = {
   orderStatus?: string;
   authorizationUrls?: string[];
   finalizeUrl?: string;
+  privateKeyReady: boolean;
+  csrReady: boolean;
   createdAt: string;
   updatedAt: string;
 };

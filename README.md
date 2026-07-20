@@ -33,6 +33,7 @@ DNS challenge 自动写入、ACME challenge 通知、ACME finalize、证书下�
 - ACME order 创建，使用已注册账号的 kid JWS 发起 newOrder，并持久化 order URL、order 状态、authorization URLs 和 finalize URL
 - ACME authorization 读取和 DNS-01 TXT 记录预览，展示 `_acme-challenge` 记录名和值，但不自动写入 DNS
 - 证书申请记录创建、列表和删除
+- 创建证书申请时自动生成 P-256 证书私钥和 CSR，私钥加密写入本地数据文件且不从 API 返回
 - 证书申请预检查，不创建记录即可返回规范化域名、DNS 账号和提示
 - 证书申请域名基础校验、SAN 去重和小写规范化
 - 一个证书申请只允许一种 challenge mode，当前固定为 `dns-01`
@@ -88,13 +89,13 @@ DNS challenge 自动写入、ACME challenge 通知、ACME finalize、证书下�
 - **HTTP**：标准库 `net/http`
 - **密码存储**：`golang.org/x/crypto/argon2`
 - **会话存储**：仅在服务端保存会话令牌摘要
-- **数据存储**：JSON 文件，默认路径为 `backend/data/tqqssl-personal.json`，保存用户、会话、DNS 账号、证书申请和 ACME 账号注册状态
-- **凭据保护**：DNS SecretKey 使用 AES-GCM 加密，默认密钥文件为 `backend/data/tqqssl-personal.key`
+- **数据存储**：JSON 文件，默认路径为 `backend/data/tqqssl-personal.json`，保存用户、会话、DNS 账号、证书申请、证书 CSR 和 ACME 账号注册状态
+- **凭据保护**：DNS SecretKey 和证书私钥使用 AES-GCM 加密，默认密钥文件为 `backend/data/tqqssl-personal.key`
 - **ACME 账号**：启动时自动生成或加载 P-256 ECDSA ACME account key，默认路径为 `backend/data/acme-account.key`
 - **配置方式**：环境变量
 - **接口边界**：所有 DNS 账号和证书申请接口均要求本地管理员会话
 
-> 数据文件、DNS 加密密钥文件和 ACME 账号私钥文件都会以 `0600` 权限写入。密钥文件不应提交到仓库；如果 DNS 加密密钥文件丢失，已保存的 DNS SecretKey 将无法解密。如果 ACME 账号私钥丢失，后续真实签发时需要重新注册 ACME 账号。
+> 数据文件、DNS/证书私钥加密密钥文件和 ACME 账号私钥文件都会以 `0600` 权限写入。密钥文件不应提交到仓库；如果 DNS/证书私钥加密密钥文件丢失，已保存的 DNS SecretKey 和证书私钥将无法解密。如果 ACME 账号私钥丢失，后续真实签发时需要重新注册 ACME 账号。
 
 ### API 接口
 

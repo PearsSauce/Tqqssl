@@ -461,6 +461,42 @@ func TestCreateCertificateACMEOrderPersistsOrderStatus(t *testing.T) {
 	}
 }
 
+func TestCreateCertificateApplicationWithoutSANsReturnsEmptyArray(t *testing.T) {
+	handler := newTestHandler(t)
+	cookie := registerAdmin(t, handler)
+	createDNSRec := requestWithCookie(handler, http.MethodPost, "/api/v1/dns-accounts", `{
+		"name":"AliDNS 主账号",
+		"provider":"alidns",
+		"accessKey":"AKIDEXAMPLE1234567890",
+		"secretKey":"VerySecretValueShouldNotLeak"
+	}`, cookie)
+	if createDNSRec.Code != http.StatusCreated {
+		t.Fatalf("create dns account = %d %s", createDNSRec.Code, createDNSRec.Body.String())
+	}
+	var dnsAccount DNSAccountDTO
+	if err := json.Unmarshal(createDNSRec.Body.Bytes(), &dnsAccount); err != nil {
+		t.Fatal(err)
+	}
+	createCertificateRec := requestWithCookie(handler, http.MethodPost, "/api/v1/certificates/applications", `{
+		"primaryDomain":"example.com",
+		"dnsAccountId":"`+dnsAccount.ID+`",
+		"challengeMode":"dns-01"
+	}`, cookie)
+	if createCertificateRec.Code != http.StatusCreated {
+		t.Fatalf("create certificate application = %d %s", createCertificateRec.Code, createCertificateRec.Body.String())
+	}
+	var application CertificateApplicationDTO
+	if err := json.Unmarshal(createCertificateRec.Body.Bytes(), &application); err != nil {
+		t.Fatal(err)
+	}
+	if application.SANs == nil || len(application.SANs) != 0 {
+		t.Fatalf("sans should be an empty array, got %#v in %s", application.SANs, createCertificateRec.Body.String())
+	}
+	if !application.PrivateKeyReady || !application.CSRReady {
+		t.Fatalf("certificate key and csr should be ready: %#v", application)
+	}
+}
+
 func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
 	handler, dataFile := newTestHandlerWithData(t)
 
@@ -585,6 +621,19 @@ func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
 	}
 	if application.ID == "" || application.PrimaryDomain != "example.com" || application.ChallengeMode != challengeModeDNS01 || application.Status != certificatePending {
 		t.Fatalf("unexpected certificate application dto: %#v", application)
+	}
+	if !application.PrivateKeyReady || !application.CSRReady {
+		t.Fatalf("certificate application should generate private key and csr: %#v", application)
+	}
+	if strings.Contains(createCertificateRec.Body.String(), "PRIVATE KEY") || strings.Contains(createCertificateRec.Body.String(), "certificatePrivateKey") || strings.Contains(createCertificateRec.Body.String(), "csrPem") {
+		t.Fatalf("certificate dto leaked key/csr material: %s", createCertificateRec.Body.String())
+	}
+	data, err = os.ReadFile(dataFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "EC PRIVATE KEY") || strings.Contains(string(data), "BEGIN PRIVATE KEY") || !strings.Contains(string(data), "enc:v1:") || !strings.Contains(string(data), "CERTIFICATE REQUEST") {
+		t.Fatalf("certificate key should be encrypted and csr should be persisted: %s", string(data))
 	}
 	if len(application.SANs) != 2 || application.SANs[0] != "www.example.com" || application.SANs[1] != "*.example.com" {
 		t.Fatalf("unexpected normalized sans: %#v", application.SANs)

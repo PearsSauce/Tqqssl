@@ -206,6 +206,8 @@ export function CertificateApplicationsPanel({ applications, acmeStatus, dnsAcco
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="font-medium text-slate-950">{application.primaryDomain}</div>
                       <StatusPill>{application.status}</StatusPill>
+                      {application.privateKeyReady ? <StatusPill>私钥已生成</StatusPill> : null}
+                      {application.csrReady ? <StatusPill>CSR 已生成</StatusPill> : null}
                       {application.orderStatus ? <StatusPill>order {application.orderStatus}</StatusPill> : null}
                     </div>
                     <div className="mt-2 text-sm text-slate-500">
@@ -215,9 +217,9 @@ export function CertificateApplicationsPanel({ applications, acmeStatus, dnsAcco
                     {authorizationsByApplicationID[application.id] ? (
                       <CertificateAuthorizationDetails authorizations={authorizationsByApplicationID[application.id]} />
                     ) : null}
-                    {application.sans.length > 0 ? (
+                    {(application.sans ?? []).length > 0 ? (
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {application.sans.map((domain) => (
+                        {(application.sans ?? []).map((domain) => (
                           <span key={domain} className="rounded-full bg-white px-3 py-1 text-xs text-slate-600 shadow-sm">{domain}</span>
                         ))}
                       </div>

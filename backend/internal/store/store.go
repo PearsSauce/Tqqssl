@@ -50,6 +50,8 @@ type CertificateApplication struct {
 	OrderStatus       string    `json:"orderStatus,omitempty"`
 	AuthorizationURLs []string  `json:"authorizationUrls,omitempty"`
 	FinalizeURL       string    `json:"finalizeUrl,omitempty"`
+	CertificateKey    string    `json:"certificateKey,omitempty"`
+	CSRPEM            string    `json:"csrPem,omitempty"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 }

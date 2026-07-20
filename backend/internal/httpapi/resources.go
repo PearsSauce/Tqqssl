@@ -9,6 +9,7 @@ import (
 
 	"github.com/PearsSauce/Tqqssl/backend/internal/acmeauthz"
 	"github.com/PearsSauce/Tqqssl/backend/internal/acmeorder"
+	"github.com/PearsSauce/Tqqssl/backend/internal/certcrypto"
 	"github.com/PearsSauce/Tqqssl/backend/internal/id"
 	"github.com/PearsSauce/Tqqssl/backend/internal/store"
 )
@@ -42,6 +43,8 @@ type CertificateApplicationDTO struct {
 	OrderStatus       string    `json:"orderStatus,omitempty"`
 	AuthorizationURLs []string  `json:"authorizationUrls,omitempty"`
 	FinalizeURL       string    `json:"finalizeUrl,omitempty"`
+	PrivateKeyReady   bool      `json:"privateKeyReady"`
+	CSRReady          bool      `json:"csrReady"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 }
@@ -309,16 +312,30 @@ func (s *Server) createCertificateApplication(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "生成证书申请 ID 失败")
 		return
 	}
+	csrBundle, err := certcrypto.GenerateKeyAndCSR(certificateInputDomains(input))
+	if err != nil {
+		s.logger.Error("generate certificate csr failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "生成证书私钥和 CSR 失败")
+		return
+	}
+	encryptedPrivateKey, err := s.secretBox.Encrypt(csrBundle.PrivateKeyPEM)
+	if err != nil {
+		s.logger.Error("encrypt certificate private key failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "加密证书私钥失败")
+		return
+	}
 	now := time.Now().UTC()
 	application, err := s.store.CreateCertificateApplication(store.CertificateApplication{
-		ID:            applicationID,
-		PrimaryDomain: input.primaryDomain,
-		SANs:          input.sans,
-		DNSAccountID:  input.dnsAccount.ID,
-		ChallengeMode: input.challengeMode,
-		Status:        certificatePending,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:             applicationID,
+		PrimaryDomain:  input.primaryDomain,
+		SANs:           input.sans,
+		DNSAccountID:   input.dnsAccount.ID,
+		ChallengeMode:  input.challengeMode,
+		Status:         certificatePending,
+		CertificateKey: encryptedPrivateKey,
+		CSRPEM:         csrBundle.CSRPEM,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusBadRequest, "DNS 账号不存在")
@@ -628,7 +645,7 @@ func toCertificateApplicationDTO(application store.CertificateApplication, dnsAc
 	return CertificateApplicationDTO{
 		ID:                application.ID,
 		PrimaryDomain:     application.PrimaryDomain,
-		SANs:              append([]string(nil), application.SANs...),
+		SANs:              cloneStringSlice(application.SANs),
 		DNSAccountID:      application.DNSAccountID,
 		DNSAccountName:    dnsAccountName,
 		ChallengeMode:     application.ChallengeMode,
@@ -637,6 +654,8 @@ func toCertificateApplicationDTO(application store.CertificateApplication, dnsAc
 		OrderStatus:       application.OrderStatus,
 		AuthorizationURLs: append([]string(nil), application.AuthorizationURLs...),
 		FinalizeURL:       application.FinalizeURL,
+		PrivateKeyReady:   strings.TrimSpace(application.CertificateKey) != "",
+		CSRReady:          strings.TrimSpace(application.CSRPEM) != "",
 		CreatedAt:         application.CreatedAt,
 		UpdatedAt:         application.UpdatedAt,
 	}
@@ -699,11 +718,25 @@ func certificatePrecheckWarnings(primaryDomain string, sans []string) []string {
 	return warnings
 }
 
+func certificateInputDomains(input certificateApplicationInput) []string {
+	domains := make([]string, 0, 1+len(input.sans))
+	domains = append(domains, input.primaryDomain)
+	domains = append(domains, input.sans...)
+	return domains
+}
+
 func certificateDomains(application store.CertificateApplication) []string {
 	domains := make([]string, 0, 1+len(application.SANs))
 	domains = append(domains, application.PrimaryDomain)
 	domains = append(domains, application.SANs...)
 	return domains
+}
+
+func cloneStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	return append([]string(nil), values...)
 }
 
 func maskValue(value string) string {
