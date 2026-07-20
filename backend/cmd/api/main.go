@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/PearsSauce/Tqqssl/backend/internal/acmeaccount"
 	"github.com/PearsSauce/Tqqssl/backend/internal/config"
 	"github.com/PearsSauce/Tqqssl/backend/internal/httpapi"
 	"github.com/PearsSauce/Tqqssl/backend/internal/secretbox"
@@ -32,6 +33,12 @@ func main() {
 	} else if migrated > 0 {
 		logger.Info("migrated plaintext dns account secrets", "count", migrated)
 	}
+	accountKey, err := acmeaccount.Open(cfg.ACMEAccountKeyFile)
+	if err != nil {
+		logger.Error("open acme account key failed", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("acme account key ready", "key_type", accountKey.Type(), "key_file", cfg.ACMEAccountKeyFile)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

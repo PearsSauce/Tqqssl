@@ -26,6 +26,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - DNS 账号创建、列表和删除
 - DNS 账号元数据更新和 SecretKey 轮换
 - DNS 账号 SecretKey 使用本地密钥文件加密后写入数据文件，API 响应不返回明文
+- ACME 账号私钥自动生成和加载，为后续真实签发做准备
 - 证书申请记录创建、列表和删除
 - 证书申请预检查，不创建记录即可返回规范化域名、DNS 账号和提示
 - 证书申请域名基础校验、SAN 去重和小写规范化
@@ -74,10 +75,11 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - **会话存储**：仅在服务端保存会话令牌摘要
 - **数据存储**：JSON 文件，默认路径为 `backend/data/tqqssl-personal.json`
 - **凭据保护**：DNS SecretKey 使用 AES-GCM 加密，默认密钥文件为 `backend/data/tqqssl-personal.key`
+- **ACME 账号**：启动时自动生成或加载 P-256 ECDSA ACME account key，默认路径为 `backend/data/acme-account.key`
 - **配置方式**：环境变量
 - **接口边界**：所有 DNS 账号和证书申请接口均要求本地管理员会话
 
-> 数据文件和密钥文件都会以 `0600` 权限写入。密钥文件不应提交到仓库；如果密钥文件丢失，已保存的 DNS SecretKey 将无法解密。
+> 数据文件、DNS 加密密钥文件和 ACME 账号私钥文件都会以 `0600` 权限写入。密钥文件不应提交到仓库；如果 DNS 加密密钥文件丢失，已保存的 DNS SecretKey 将无法解密。如果 ACME 账号私钥丢失，后续真实签发时需要重新注册 ACME 账号。
 
 ### API 接口
 
@@ -153,6 +155,7 @@ http://localhost:5173
 | `TQQSSL_ADDR` | `:8080` | API 监听地址 |
 | `TQQSSL_DATA_FILE` | `data/tqqssl-personal.json` | 用户、会话、DNS 账号和证书申请数据文件 |
 | `TQQSSL_SECRET_KEY_FILE` | `data/tqqssl-personal.key` | DNS SecretKey 本地加密密钥文件 |
+| `TQQSSL_ACME_ACCOUNT_KEY_FILE` | `data/acme-account.key` | ACME 账号 P-256 私钥文件 |
 | `TQQSSL_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 允许的前端来源 |
 | `TQQSSL_SESSION_TTL_HOURS` | `24` | 会话有效期，单位为小时 |
 
@@ -172,6 +175,7 @@ go run ./cmd/api
 ```bash
 rm backend/data/tqqssl-personal.json
 rm backend/data/tqqssl-personal.key
+rm backend/data/acme-account.key
 ```
 
 数据文件和密钥文件已加入 Git 忽略规则，不应提交到仓库。
