@@ -4,14 +4,14 @@
 
 Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证书自动化能力。
 
-当前版本先完成独立运行所需的认证基础设施，采用：
+当前版本先完成独立运行所需的认证、DNS 账号和证书申请基础闭环，采用：
 
 - 前端静态应用
 - Go API 服务
 - 本地文件持久化
 - 浏览器 HttpOnly 会话
 
-DNS 账号、证书申请和部署能力将在此基础上按个人版需求逐步实现。
+真实 ACME 签发、DNS 服务商适配和部署能力将在此基础上按个人版需求逐步实现。
 
 ## 已实现功能
 
@@ -23,7 +23,12 @@ DNS 账号、证书申请和部署能力将在此基础上按个人版需求逐�
 - UUIDv7 用户 ID
 - HttpOnly、SameSite=Lax 会话 Cookie
 - `/healthz` 和 `/readyz` 健康检查
-- 前端登录、注册和基础控制台
+- DNS 账号创建、列表和删除
+- DNS 账号 SecretKey 仅写入本地数据文件，API 响应不返回明文
+- 证书申请记录创建和列表
+- 证书申请域名基础校验、SAN 去重和小写规范化
+- 一个证书申请只允许一种 challenge mode，当前固定为 `dns-01`
+- 前端登录、注册、DNS 账号和证书申请控制台
 - CORS 配置和本地开发代理
 
 当前版本不包含多用户、SSO/OIDC、Agent、订阅、支付、公告和兑换功能。
@@ -40,7 +45,7 @@ DNS 账号、证书申请和部署能力将在此基础上按个人版需求逐�
 │   ├── internal/id/              # UUIDv7 生成
 │   └── internal/store/           # 本地 JSON 数据存储
 └── frontend/
-    ├── src/App.tsx               # 页面与认证流程
+    ├── src/App.tsx               # 页面、认证流程和个人版控制台
     ├── src/api.ts                # API 请求封装
     ├── src/styles.css            # Tailwind CSS 与主题样式
     └── vite.config.ts            # Vite、Tailwind 和开发代理配置
@@ -55,6 +60,7 @@ DNS 账号、证书申请和部署能力将在此基础上按个人版需求逐�
 - **状态管理**：当前使用 React 本地状态
 - **路由**：当前使用浏览器 History API，页面范围为登录、注册和控制台
 - **认证方式**：通过 `fetch` 携带 HttpOnly Cookie 调用 API，不在 LocalStorage 保存访问令牌
+- **控制台能力**：DNS 账号管理、证书申请创建和记录列表
 
 前端默认将 `/api` 请求代理到 `http://localhost:8080`。
 
@@ -66,8 +72,11 @@ DNS 账号、证书申请和部署能力将在此基础上按个人版需求逐�
 - **会话存储**：仅在服务端保存会话令牌摘要
 - **数据存储**：JSON 文件，默认路径为 `backend/data/tqqssl-personal.json`
 - **配置方式**：环境变量
+- **接口边界**：所有 DNS 账号和证书申请接口均要求本地管理员会话
 
-### 认证接口
+> 当前 MVP 使用本地 JSON 文件保存 DNS 凭据，文件权限写入为 `0600`，API DTO 不返回 SecretKey。后续接入真实签发前应补充本地加密或系统密钥环存储。
+
+### API 接口
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -78,8 +87,14 @@ DNS 账号、证书申请和部署能力将在此基础上按个人版需求逐�
 | `POST` | `/api/v1/auth/login` | 用户名或邮箱登录 |
 | `POST` | `/api/v1/auth/logout` | 删除当前服务端会话 |
 | `GET` | `/api/v1/auth/me` | 查询当前登录用户 |
+| `GET` | `/api/v1/dns-accounts` | 查询 DNS 账号列表 |
+| `POST` | `/api/v1/dns-accounts` | 创建 DNS 账号 |
+| `DELETE` | `/api/v1/dns-accounts/{id}` | 删除未被证书申请引用的 DNS 账号 |
+| `GET` | `/api/v1/certificates/applications` | 查询证书申请记录 |
+| `POST` | `/api/v1/certificates/applications` | 创建证书申请记录 |
 
 注册接口只允许在用户数据为空时执行一次。
+DNS 和证书申请接口均要求已登录。
 
 ## 如何运行
 
@@ -130,7 +145,7 @@ http://localhost:5173
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `TQQSSL_ADDR` | `:8080` | API 监听地址 |
-| `TQQSSL_DATA_FILE` | `data/tqqssl-personal.json` | 用户和会话数据文件 |
+| `TQQSSL_DATA_FILE` | `data/tqqssl-personal.json` | 用户、会话、DNS 账号和证书申请数据文件 |
 | `TQQSSL_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 允许的前端来源 |
 | `TQQSSL_SESSION_TTL_HOURS` | `24` | 会话有效期，单位为小时 |
 
@@ -143,7 +158,7 @@ TQQSSL_FRONTEND_ORIGIN=http://localhost:5173 \
 go run ./cmd/api
 ```
 
-### 重置本地管理员
+### 重置本地数据
 
 停止后端后删除数据文件，再重新启动：
 

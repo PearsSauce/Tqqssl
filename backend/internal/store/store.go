@@ -28,9 +28,33 @@ type Session struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+type DNSAccount struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Provider  string    `json:"provider"`
+	AccessKey string    `json:"accessKey"`
+	SecretKey string    `json:"secretKey"`
+	Remark    string    `json:"remark,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type CertificateApplication struct {
+	ID            string    `json:"id"`
+	PrimaryDomain string    `json:"primaryDomain"`
+	SANs          []string  `json:"sans"`
+	DNSAccountID  string    `json:"dnsAccountId"`
+	ChallengeMode string    `json:"challengeMode"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
 type document struct {
-	Users    []User    `json:"users"`
-	Sessions []Session `json:"sessions"`
+	Users                   []User                   `json:"users"`
+	Sessions                []Session                `json:"sessions"`
+	DNSAccounts             []DNSAccount             `json:"dnsAccounts"`
+	CertificateApplications []CertificateApplication `json:"certificateApplications"`
 }
 
 type Store struct {
@@ -43,6 +67,7 @@ var (
 	ErrNotFound       = errors.New("not found")
 	ErrAlreadyExists  = errors.New("already exists")
 	ErrRegisterClosed = errors.New("register closed")
+	ErrInUse          = errors.New("in use")
 )
 
 func Open(path string) (*Store, error) {
@@ -59,25 +84,20 @@ func (s *Store) load() error {
 
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		s.doc = document{Users: []User{}, Sessions: []Session{}}
+		s.doc = newDocument()
 		return s.saveLocked()
 	}
 	if err != nil {
 		return err
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		s.doc = document{Users: []User{}, Sessions: []Session{}}
+		s.doc = newDocument()
 		return nil
 	}
 	if err := json.Unmarshal(data, &s.doc); err != nil {
 		return err
 	}
-	if s.doc.Users == nil {
-		s.doc.Users = []User{}
-	}
-	if s.doc.Sessions == nil {
-		s.doc.Sessions = []Session{}
-	}
+	s.ensureDocument()
 	return nil
 }
 
@@ -170,6 +190,97 @@ func (s *Store) DeleteSession(tokenHash string) error {
 	return s.saveLocked()
 }
 
+func (s *Store) ListDNSAccounts() []DNSAccount {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accounts := make([]DNSAccount, 0, len(s.doc.DNSAccounts))
+	for _, account := range s.doc.DNSAccounts {
+		accounts = append(accounts, account)
+	}
+	return accounts
+}
+
+func (s *Store) GetDNSAccount(id string) (DNSAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, account := range s.doc.DNSAccounts {
+		if account.ID == id {
+			return account, nil
+		}
+	}
+	return DNSAccount{}, ErrNotFound
+}
+
+func (s *Store) CreateDNSAccount(account DNSAccount) (DNSAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.doc.DNSAccounts {
+		if existing.ID == account.ID || normalize(existing.Name) == normalize(account.Name) {
+			return DNSAccount{}, ErrAlreadyExists
+		}
+	}
+	s.doc.DNSAccounts = append(s.doc.DNSAccounts, account)
+	return account, s.saveLocked()
+}
+
+func (s *Store) DeleteDNSAccount(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, application := range s.doc.CertificateApplications {
+		if application.DNSAccountID == id {
+			return ErrInUse
+		}
+	}
+	kept := s.doc.DNSAccounts[:0]
+	found := false
+	for _, account := range s.doc.DNSAccounts {
+		if account.ID == id {
+			found = true
+			continue
+		}
+		kept = append(kept, account)
+	}
+	if !found {
+		return ErrNotFound
+	}
+	s.doc.DNSAccounts = kept
+	return s.saveLocked()
+}
+
+func (s *Store) ListCertificateApplications() []CertificateApplication {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	applications := make([]CertificateApplication, 0, len(s.doc.CertificateApplications))
+	for _, application := range s.doc.CertificateApplications {
+		application.SANs = append([]string(nil), application.SANs...)
+		applications = append(applications, application)
+	}
+	return applications
+}
+
+func (s *Store) CreateCertificateApplication(application CertificateApplication) (CertificateApplication, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dnsAccountExists := false
+	for _, account := range s.doc.DNSAccounts {
+		if account.ID == application.DNSAccountID {
+			dnsAccountExists = true
+			break
+		}
+	}
+	if !dnsAccountExists {
+		return CertificateApplication{}, ErrNotFound
+	}
+	for _, existing := range s.doc.CertificateApplications {
+		if existing.ID == application.ID {
+			return CertificateApplication{}, ErrAlreadyExists
+		}
+	}
+	application.SANs = append([]string(nil), application.SANs...)
+	s.doc.CertificateApplications = append(s.doc.CertificateApplications, application)
+	return application, s.saveLocked()
+}
+
 func (s *Store) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
@@ -193,6 +304,30 @@ func (s *Store) pruneExpiredLocked(now time.Time) {
 		}
 	}
 	s.doc.Sessions = kept
+}
+
+func newDocument() document {
+	return document{
+		Users:                   []User{},
+		Sessions:                []Session{},
+		DNSAccounts:             []DNSAccount{},
+		CertificateApplications: []CertificateApplication{},
+	}
+}
+
+func (s *Store) ensureDocument() {
+	if s.doc.Users == nil {
+		s.doc.Users = []User{}
+	}
+	if s.doc.Sessions == nil {
+		s.doc.Sessions = []Session{}
+	}
+	if s.doc.DNSAccounts == nil {
+		s.doc.DNSAccounts = []DNSAccount{}
+	}
+	if s.doc.CertificateApplications == nil {
+		s.doc.CertificateApplications = []CertificateApplication{}
+	}
 }
 
 func sameIdentity(user User, username string, email string) bool {

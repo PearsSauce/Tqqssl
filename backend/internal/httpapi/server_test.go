@@ -102,6 +102,80 @@ func TestAuthRejectsWeakPasswordAndBadLogin(t *testing.T) {
 	}
 }
 
+func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
+	handler := newTestHandler(t)
+
+	unauthorizedRec := request(handler, http.MethodGet, "/api/v1/dns-accounts", "", nil)
+	if unauthorizedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized dns list = %d %s, want 401", unauthorizedRec.Code, unauthorizedRec.Body.String())
+	}
+
+	cookie := registerAdmin(t, handler)
+	createDNSRec := requestWithCookie(handler, http.MethodPost, "/api/v1/dns-accounts", `{
+		"name":"AliDNS 主账号",
+		"provider":"AliDNS",
+		"accessKey":"AKIDEXAMPLE1234567890",
+		"secretKey":"VerySecretValueShouldNotLeak",
+		"remark":"个人版本地测试账号"
+	}`, cookie)
+	if createDNSRec.Code != http.StatusCreated {
+		t.Fatalf("create dns account = %d %s", createDNSRec.Code, createDNSRec.Body.String())
+	}
+	if strings.Contains(createDNSRec.Body.String(), "VerySecretValueShouldNotLeak") || strings.Contains(createDNSRec.Body.String(), "secretKey") {
+		t.Fatalf("dns dto leaked secret: %s", createDNSRec.Body.String())
+	}
+	var dnsAccount DNSAccountDTO
+	if err := json.Unmarshal(createDNSRec.Body.Bytes(), &dnsAccount); err != nil {
+		t.Fatal(err)
+	}
+	if dnsAccount.ID == "" || dnsAccount.Provider != "alidns" || !dnsAccount.HasSecretKey || dnsAccount.AccessKeyMasked == "" {
+		t.Fatalf("unexpected dns dto: %#v", dnsAccount)
+	}
+
+	listDNSRec := requestWithCookie(handler, http.MethodGet, "/api/v1/dns-accounts", "", cookie)
+	if listDNSRec.Code != http.StatusOK {
+		t.Fatalf("list dns accounts = %d %s", listDNSRec.Code, listDNSRec.Body.String())
+	}
+	if strings.Contains(listDNSRec.Body.String(), "VerySecretValueShouldNotLeak") || strings.Contains(listDNSRec.Body.String(), "secretKey") {
+		t.Fatalf("dns list leaked secret: %s", listDNSRec.Body.String())
+	}
+
+	missingDNSRec := requestWithCookie(handler, http.MethodPost, "/api/v1/certificates/applications", `{
+		"primaryDomain":"example.com",
+		"sans":[],
+		"dnsAccountId":"missing",
+		"challengeMode":"dns-01"
+	}`, cookie)
+	if missingDNSRec.Code != http.StatusBadRequest {
+		t.Fatalf("missing dns certificate application = %d %s, want 400", missingDNSRec.Code, missingDNSRec.Body.String())
+	}
+
+	createCertificateRec := requestWithCookie(handler, http.MethodPost, "/api/v1/certificates/applications", `{
+		"primaryDomain":"Example.COM.",
+		"sans":["www.example.com","*.example.com","www.example.com"],
+		"dnsAccountId":"`+dnsAccount.ID+`",
+		"challengeMode":"dns-01"
+	}`, cookie)
+	if createCertificateRec.Code != http.StatusCreated {
+		t.Fatalf("create certificate application = %d %s", createCertificateRec.Code, createCertificateRec.Body.String())
+	}
+	var application CertificateApplicationDTO
+	if err := json.Unmarshal(createCertificateRec.Body.Bytes(), &application); err != nil {
+		t.Fatal(err)
+	}
+	if application.ID == "" || application.PrimaryDomain != "example.com" || application.ChallengeMode != challengeModeDNS01 || application.Status != certificatePending {
+		t.Fatalf("unexpected certificate application dto: %#v", application)
+	}
+	if len(application.SANs) != 2 || application.SANs[0] != "www.example.com" || application.SANs[1] != "*.example.com" {
+		t.Fatalf("unexpected normalized sans: %#v", application.SANs)
+	}
+
+	deleteDNSRec := requestWithCookie(handler, http.MethodDelete, "/api/v1/dns-accounts/"+dnsAccount.ID, "", cookie)
+	if deleteDNSRec.Code != http.StatusConflict {
+		t.Fatalf("delete dns in use = %d %s, want 409", deleteDNSRec.Code, deleteDNSRec.Body.String())
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "store.json"))
@@ -110,6 +184,23 @@ func newTestHandler(t *testing.T) http.Handler {
 	}
 	api := New(config.Config{FrontendOrigin: "https://app.example.test", SessionTTL: time.Hour}, st, nil)
 	return api.Routes()
+}
+
+func registerAdmin(t *testing.T, handler http.Handler) *http.Cookie {
+	t.Helper()
+	rec := request(handler, http.MethodPost, "/api/v1/auth/register", `{
+		"username":"admin",
+		"email":"admin@example.test",
+		"password":"AdminPassw0rd!"
+	}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register admin = %d %s", rec.Code, rec.Body.String())
+	}
+	cookie := findCookie(rec.Result().Cookies(), sessionCookieName)
+	if cookie == nil || cookie.Value == "" {
+		t.Fatalf("register admin did not set session cookie: %#v", rec.Result().Cookies())
+	}
+	return cookie
 }
 
 func request(handler http.Handler, method string, path string, body string, headers map[string]string) *httptest.ResponseRecorder {
@@ -127,6 +218,9 @@ func request(handler http.Handler, method string, path string, body string, head
 
 func requestWithCookie(handler http.Handler, method string, path string, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if cookie != nil {
 		req.AddCookie(cookie)
 	}
