@@ -61,6 +61,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/dns-accounts/{id}", s.requireAuth(s.deleteDNSAccount))
 	mux.HandleFunc("GET /api/v1/certificates/applications", s.requireAuth(s.listCertificateApplications))
 	mux.HandleFunc("POST /api/v1/certificates/applications", s.requireAuth(s.createCertificateApplication))
+	mux.HandleFunc("DELETE /api/v1/certificates/applications/{id}", s.requireAuth(s.deleteCertificateApplication))
 	return s.withMiddleware(mux)
 }
 

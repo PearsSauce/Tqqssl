@@ -92,3 +92,41 @@ func TestUpdateDNSAccountRejectsDuplicateName(t *testing.T) {
 		t.Fatalf("duplicate update error = %v, want ErrAlreadyExists", err)
 	}
 }
+
+func TestDeleteCertificateApplicationUnblocksDNSAccountDeletion(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "store.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := st.CreateDNSAccount(DNSAccount{
+		ID:        "dns",
+		Name:      "dns",
+		Provider:  "alidns",
+		SecretKey: "enc:v1:dns",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateCertificateApplication(CertificateApplication{
+		ID:            "cert",
+		PrimaryDomain: "example.com",
+		DNSAccountID:  "dns",
+		ChallengeMode: "dns-01",
+		Status:        "pending",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteDNSAccount("dns"); err != ErrInUse {
+		t.Fatalf("delete dns in use error = %v, want ErrInUse", err)
+	}
+	if err := st.DeleteCertificateApplication("cert"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteDNSAccount("dns"); err != nil {
+		t.Fatalf("delete dns after certificate deletion = %v", err)
+	}
+}

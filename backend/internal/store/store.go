@@ -324,6 +324,25 @@ func (s *Store) CreateCertificateApplication(application CertificateApplication)
 	return application, s.saveLocked()
 }
 
+func (s *Store) DeleteCertificateApplication(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.doc.CertificateApplications[:0]
+	found := false
+	for _, application := range s.doc.CertificateApplications {
+		if application.ID == id {
+			found = true
+			continue
+		}
+		kept = append(kept, application)
+	}
+	if !found {
+		return ErrNotFound
+	}
+	s.doc.CertificateApplications = kept
+	return s.saveLocked()
+}
+
 func (s *Store) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err

@@ -340,6 +340,7 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
               applications={applications}
               dnsAccounts={dnsAccounts}
               onCreated={(application) => setApplications((current) => [application, ...current])}
+              onDeleted={(applicationID) => setApplications((current) => current.filter((application) => application.id !== applicationID))}
             />
           </div>
         )}
@@ -606,15 +607,17 @@ function DNSAccountsPanel({ accounts, onCreated, onUpdated, onDeleted }: {
   );
 }
 
-function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated }: {
+function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, onDeleted }: {
   applications: CertificateApplication[];
   dnsAccounts: DNSAccount[];
   onCreated: (application: CertificateApplication) => void;
+  onDeleted: (applicationID: string) => void;
 }) {
   const [primaryDomain, setPrimaryDomain] = useState("");
   const [sansText, setSANsText] = useState("");
   const [selectedDNSAccountID, setSelectedDNSAccountID] = useState("");
   const [pending, setPending] = useState(false);
+  const [deletingID, setDeletingID] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -647,6 +650,19 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated }: 
       setError(errorMessage(err, "创建证书申请失败"));
     } finally {
       setPending(false);
+    }
+  }
+
+  async function deleteApplication(applicationID: string) {
+    setDeletingID(applicationID);
+    setError("");
+    try {
+      await apiRequest<void>(`/certificates/applications/${applicationID}`, { method: "DELETE" });
+      onDeleted(applicationID);
+    } catch (err) {
+      setError(errorMessage(err, "删除证书申请失败"));
+    } finally {
+      setDeletingID("");
     }
   }
 
@@ -728,7 +744,16 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated }: 
                       </div>
                     ) : null}
                   </div>
-                  <div className="text-xs text-slate-400">{formatDateTime(application.createdAt)}</div>
+                  <div className="flex flex-col items-start gap-2 md:items-end">
+                    <div className="text-xs text-slate-400">{formatDateTime(application.createdAt)}</div>
+                    <Button
+                      variant="secondary"
+                      isPending={deletingID === application.id}
+                      onPress={() => void deleteApplication(application.id)}
+                    >
+                      删除申请
+                    </Button>
+                  </div>
                 </div>
               </div>
             ))

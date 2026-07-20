@@ -290,6 +290,24 @@ func (s *Server) createCertificateApplication(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, toCertificateApplicationDTO(application, account.Name))
 }
 
+func (s *Server) deleteCertificateApplication(w http.ResponseWriter, r *http.Request, _ store.User) {
+	applicationID := strings.TrimSpace(r.PathValue("id"))
+	if applicationID == "" {
+		writeError(w, http.StatusBadRequest, "证书申请 ID 不能为空")
+		return
+	}
+	err := s.store.DeleteCertificateApplication(applicationID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "证书申请不存在")
+	case err != nil:
+		s.logger.Error("delete certificate application failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "删除证书申请失败")
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func validateDNSAccountMetadata(name string, provider string, accessKey string, remark string) error {
 	if len([]rune(name)) < 1 || len([]rune(name)) > 64 {
 		return errors.New("DNS 账号名称长度需要在 1 到 64 个字符之间")

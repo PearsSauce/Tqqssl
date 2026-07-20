@@ -210,6 +210,16 @@ func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
 	if deleteDNSRec.Code != http.StatusConflict {
 		t.Fatalf("delete dns in use = %d %s, want 409", deleteDNSRec.Code, deleteDNSRec.Body.String())
 	}
+
+	deleteCertificateRec := requestWithCookie(handler, http.MethodDelete, "/api/v1/certificates/applications/"+application.ID, "", cookie)
+	if deleteCertificateRec.Code != http.StatusNoContent {
+		t.Fatalf("delete certificate application = %d %s, want 204", deleteCertificateRec.Code, deleteCertificateRec.Body.String())
+	}
+
+	deleteDNSAfterCertificateRec := requestWithCookie(handler, http.MethodDelete, "/api/v1/dns-accounts/"+dnsAccount.ID, "", cookie)
+	if deleteDNSAfterCertificateRec.Code != http.StatusNoContent {
+		t.Fatalf("delete dns after certificate deletion = %d %s, want 204", deleteDNSAfterCertificateRec.Code, deleteDNSAfterCertificateRec.Body.String())
+	}
 }
 
 func newTestHandler(t *testing.T) http.Handler {
