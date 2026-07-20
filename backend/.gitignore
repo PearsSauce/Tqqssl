@@ -3,5 +3,6 @@
 !.env.example
 data/*.json
 data/*.tmp
+data/*.key
 coverage.out
 *.log

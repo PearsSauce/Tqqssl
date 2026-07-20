@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Addr           string
 	DataFile       string
+	SecretKeyFile  string
 	FrontendOrigin string
 	SessionTTL     time.Duration
 }
@@ -18,6 +19,7 @@ func Load() Config {
 	return Config{
 		Addr:           envString("TQQSSL_ADDR", ":8080"),
 		DataFile:       envString("TQQSSL_DATA_FILE", "data/tqqssl-personal.json"),
+		SecretKeyFile:  envString("TQQSSL_SECRET_KEY_FILE", "data/tqqssl-personal.key"),
 		FrontendOrigin: strings.TrimRight(envString("TQQSSL_FRONTEND_ORIGIN", "http://localhost:5173"), "/"),
 		SessionTTL:     time.Duration(envInt("TQQSSL_SESSION_TTL_HOURS", 24)) * time.Hour,
 	}

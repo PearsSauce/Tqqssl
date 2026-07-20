@@ -247,6 +247,29 @@ func (s *Store) DeleteDNSAccount(id string) error {
 	return s.saveLocked()
 }
 
+func (s *Store) EncryptPlaintextDNSSecrets(encrypt func(string) (string, error), isEncrypted func(string) bool) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	migrated := 0
+	for i := range s.doc.DNSAccounts {
+		secretKey := strings.TrimSpace(s.doc.DNSAccounts[i].SecretKey)
+		if secretKey == "" || isEncrypted(secretKey) {
+			continue
+		}
+		encrypted, err := encrypt(secretKey)
+		if err != nil {
+			return migrated, err
+		}
+		s.doc.DNSAccounts[i].SecretKey = encrypted
+		s.doc.DNSAccounts[i].UpdatedAt = time.Now().UTC()
+		migrated++
+	}
+	if migrated == 0 {
+		return 0, nil
+	}
+	return migrated, s.saveLocked()
+}
+
 func (s *Store) ListCertificateApplications() []CertificateApplication {
 	s.mu.Lock()
 	defer s.mu.Unlock()

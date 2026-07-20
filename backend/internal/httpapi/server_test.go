@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/PearsSauce/Tqqssl/backend/internal/config"
+	"github.com/PearsSauce/Tqqssl/backend/internal/secretbox"
 	"github.com/PearsSauce/Tqqssl/backend/internal/store"
 )
 
@@ -103,7 +105,7 @@ func TestAuthRejectsWeakPasswordAndBadLogin(t *testing.T) {
 }
 
 func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
-	handler := newTestHandler(t)
+	handler, dataFile := newTestHandlerWithData(t)
 
 	unauthorizedRec := request(handler, http.MethodGet, "/api/v1/dns-accounts", "", nil)
 	if unauthorizedRec.Code != http.StatusUnauthorized {
@@ -130,6 +132,13 @@ func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
 	}
 	if dnsAccount.ID == "" || dnsAccount.Provider != "alidns" || !dnsAccount.HasSecretKey || dnsAccount.AccessKeyMasked == "" {
 		t.Fatalf("unexpected dns dto: %#v", dnsAccount)
+	}
+	data, err := os.ReadFile(dataFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "VerySecretValueShouldNotLeak") || !strings.Contains(string(data), "enc:v1:") {
+		t.Fatalf("dns secret should be encrypted in data file: %s", string(data))
 	}
 
 	listDNSRec := requestWithCookie(handler, http.MethodGet, "/api/v1/dns-accounts", "", cookie)
@@ -178,12 +187,25 @@ func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
 
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "store.json"))
+	handler, _ := newTestHandlerWithData(t)
+	return handler
+}
+
+func newTestHandlerWithData(t *testing.T) (http.Handler, string) {
+	t.Helper()
+	dir := t.TempDir()
+	dataFile := filepath.Join(dir, "store.json")
+	keyFile := filepath.Join(dir, "secret.key")
+	st, err := store.Open(dataFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	api := New(config.Config{FrontendOrigin: "https://app.example.test", SessionTTL: time.Hour}, st, nil)
-	return api.Routes()
+	box, err := secretbox.Open(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := New(config.Config{FrontendOrigin: "https://app.example.test", SecretKeyFile: keyFile, SessionTTL: time.Hour}, st, box, nil)
+	return api.Routes(), dataFile
 }
 
 func registerAdmin(t *testing.T, handler http.Handler) *http.Cookie {

@@ -92,13 +92,19 @@ func (s *Server) createDNSAccount(w http.ResponseWriter, r *http.Request, _ stor
 		writeError(w, http.StatusInternalServerError, "生成 DNS 账号 ID 失败")
 		return
 	}
+	encryptedSecretKey, err := s.secretBox.Encrypt(secretKey)
+	if err != nil {
+		s.logger.Error("encrypt dns secret failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "加密 DNS 凭据失败")
+		return
+	}
 	now := time.Now().UTC()
 	account, err := s.store.CreateDNSAccount(store.DNSAccount{
 		ID:        accountID,
 		Name:      name,
 		Provider:  provider,
 		AccessKey: accessKey,
-		SecretKey: secretKey,
+		SecretKey: encryptedSecretKey,
 		Remark:    remark,
 		CreatedAt: now,
 		UpdatedAt: now,

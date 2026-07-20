@@ -13,15 +13,17 @@ import (
 	"github.com/PearsSauce/Tqqssl/backend/internal/auth"
 	"github.com/PearsSauce/Tqqssl/backend/internal/config"
 	"github.com/PearsSauce/Tqqssl/backend/internal/id"
+	"github.com/PearsSauce/Tqqssl/backend/internal/secretbox"
 	"github.com/PearsSauce/Tqqssl/backend/internal/store"
 )
 
 const sessionCookieName = "tqqssl_personal_session"
 
 type Server struct {
-	cfg    config.Config
-	store  *store.Store
-	logger *slog.Logger
+	cfg       config.Config
+	store     *store.Store
+	secretBox *secretbox.Box
+	logger    *slog.Logger
 }
 
 type UserDTO struct {
@@ -34,11 +36,14 @@ type UserDTO struct {
 	LastLoginAt *time.Time `json:"lastLoginAt,omitempty"`
 }
 
-func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
+func New(cfg config.Config, st *store.Store, secretBox *secretbox.Box, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{cfg: cfg, store: st, logger: logger}
+	if secretBox == nil {
+		panic("secret box is required")
+	}
+	return &Server{cfg: cfg, store: st, secretBox: secretBox, logger: logger}
 }
 
 func (s *Server) Routes() http.Handler {

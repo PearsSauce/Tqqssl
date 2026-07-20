@@ -24,7 +24,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - HttpOnly、SameSite=Lax 会话 Cookie
 - `/healthz` 和 `/readyz` 健康检查
 - DNS 账号创建、列表和删除
-- DNS 账号 SecretKey 仅写入本地数据文件，API 响应不返回明文
+- DNS 账号 SecretKey 使用本地密钥文件加密后写入数据文件，API 响应不返回明文
 - 证书申请记录创建和列表
 - 证书申请域名基础校验、SAN 去重和小写规范化
 - 一个证书申请只允许一种 challenge mode，当前固定为 `dns-01`
@@ -71,10 +71,11 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - **密码存储**：`golang.org/x/crypto/argon2`
 - **会话存储**：仅在服务端保存会话令牌摘要
 - **数据存储**：JSON 文件，默认路径为 `backend/data/tqqssl-personal.json`
+- **凭据保护**：DNS SecretKey 使用 AES-GCM 加密，默认密钥文件为 `backend/data/tqqssl-personal.key`
 - **配置方式**：环境变量
 - **接口边界**：所有 DNS 账号和证书申请接口均要求本地管理员会话
 
-> 当前 MVP 使用本地 JSON 文件保存 DNS 凭据，文件权限写入为 `0600`，API DTO 不返回 SecretKey。后续接入真实签发前应补充本地加密或系统密钥环存储。
+> 数据文件和密钥文件都会以 `0600` 权限写入。密钥文件不应提交到仓库；如果密钥文件丢失，已保存的 DNS SecretKey 将无法解密。
 
 ### API 接口
 
@@ -146,6 +147,7 @@ http://localhost:5173
 | --- | --- | --- |
 | `TQQSSL_ADDR` | `:8080` | API 监听地址 |
 | `TQQSSL_DATA_FILE` | `data/tqqssl-personal.json` | 用户、会话、DNS 账号和证书申请数据文件 |
+| `TQQSSL_SECRET_KEY_FILE` | `data/tqqssl-personal.key` | DNS SecretKey 本地加密密钥文件 |
 | `TQQSSL_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 允许的前端来源 |
 | `TQQSSL_SESSION_TTL_HOURS` | `24` | 会话有效期，单位为小时 |
 
@@ -160,10 +162,11 @@ go run ./cmd/api
 
 ### 重置本地数据
 
-停止后端后删除数据文件，再重新启动：
+停止后端后删除数据文件，再重新启动。若需要彻底重置 DNS 凭据加密密钥，也同时删除密钥文件：
 
 ```bash
 rm backend/data/tqqssl-personal.json
+rm backend/data/tqqssl-personal.key
 ```
 
-数据文件已加入 Git 忽略规则，不应提交到仓库。
+数据文件和密钥文件已加入 Git 忽略规则，不应提交到仓库。

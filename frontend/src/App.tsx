@@ -317,7 +317,7 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
         </header>
 
         <div className="grid gap-4 md:grid-cols-3">
-          <SummaryCard title="DNS 账号" value={`${dnsAccounts.length} 个`} description="本地保存 DNS API 凭据，接口响应不返回 SecretKey。" />
+          <SummaryCard title="DNS 账号" value={`${dnsAccounts.length} 个`} description="本地加密保存 DNS API 凭据，接口响应不返回 SecretKey。" />
           <SummaryCard title="证书申请" value={`${applications.length} 条`} description="当前建立申请记录，challenge mode 固定为 dns-01。" />
           <SummaryCard title="商业模块" value="未启用" description="没有多用户、SSO、Agent、订阅、支付、公告和兑换。" />
         </div>
@@ -408,7 +408,7 @@ function DNSAccountsPanel({ accounts, onCreated, onDeleted }: {
     <Card className="gap-6 p-6">
       <Card.Header>
         <Card.Title>DNS 账号</Card.Title>
-        <Card.Description>保存个人签发证书所需的 DNS API 凭据。SecretKey 仅写入本地数据文件，不会从 API 返回。</Card.Description>
+        <Card.Description>保存个人签发证书所需的 DNS API 凭据。SecretKey 会加密后写入本地数据文件，不会从 API 返回。</Card.Description>
       </Card.Header>
       <Card.Content className="grid gap-6">
         <Form
