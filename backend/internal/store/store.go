@@ -50,11 +50,21 @@ type CertificateApplication struct {
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
+type ACMEAccount struct {
+	DirectoryURL string    `json:"directoryUrl"`
+	AccountURL   string    `json:"accountUrl"`
+	ContactEmail string    `json:"contactEmail"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
 type document struct {
 	Users                   []User                   `json:"users"`
 	Sessions                []Session                `json:"sessions"`
 	DNSAccounts             []DNSAccount             `json:"dnsAccounts"`
 	CertificateApplications []CertificateApplication `json:"certificateApplications"`
+	ACMEAccount             *ACMEAccount             `json:"acmeAccount,omitempty"`
 }
 
 type Store struct {
@@ -341,6 +351,22 @@ func (s *Store) DeleteCertificateApplication(id string) error {
 	}
 	s.doc.CertificateApplications = kept
 	return s.saveLocked()
+}
+
+func (s *Store) GetACMEAccount() (ACMEAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.doc.ACMEAccount == nil {
+		return ACMEAccount{}, ErrNotFound
+	}
+	return *s.doc.ACMEAccount, nil
+}
+
+func (s *Store) SaveACMEAccount(account ACMEAccount) (ACMEAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.doc.ACMEAccount = &account
+	return account, s.saveLocked()
 }
 
 func (s *Store) saveLocked() error {

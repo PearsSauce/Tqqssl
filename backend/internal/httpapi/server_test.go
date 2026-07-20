@@ -168,6 +168,127 @@ func TestACMEDirectoryCheckRequiresAuthAndValidatesDirectory(t *testing.T) {
 	}
 }
 
+func TestRegisterACMEAccountPersistsStatus(t *testing.T) {
+	var baseURL string
+	acmeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/directory":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"newNonce":"` + baseURL + `/new-nonce",
+				"newAccount":"` + baseURL + `/new-account",
+				"newOrder":"` + baseURL + `/new-order",
+				"meta":{"termsOfService":"` + baseURL + `/terms"}
+			}`))
+		case "/new-nonce":
+			w.Header().Set("Replay-Nonce", "register-test-nonce")
+			w.WriteHeader(http.StatusNoContent)
+		case "/new-account":
+			if r.Method != http.MethodPost {
+				t.Fatalf("new account method = %s, want POST", r.Method)
+			}
+			var envelope struct {
+				Protected string `json:"protected"`
+				Payload   string `json:"payload"`
+				Signature string `json:"signature"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Protected == "" || envelope.Payload == "" || envelope.Signature == "" {
+				t.Fatalf("missing jws fields: %#v", envelope)
+			}
+			w.Header().Set("Location", baseURL+"/account/1")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"status":"valid"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer acmeServer.Close()
+	baseURL = acmeServer.URL
+	handler, _ := newTestHandlerWithDirectory(t, acmeServer.URL+"/directory")
+	cookie := registerAdmin(t, handler)
+
+	registerRec := requestWithCookie(handler, http.MethodPost, "/api/v1/acme/account/register", "{}", cookie)
+	if registerRec.Code != http.StatusOK {
+		t.Fatalf("register acme account = %d %s", registerRec.Code, registerRec.Body.String())
+	}
+	if strings.Contains(registerRec.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("register response leaked private key: %s", registerRec.Body.String())
+	}
+	var registered struct {
+		AccountRegistered bool   `json:"accountRegistered"`
+		AccountURL        string `json:"accountUrl"`
+		AccountStatus     string `json:"accountStatus"`
+		ContactEmail      string `json:"contactEmail"`
+	}
+	if err := json.Unmarshal(registerRec.Body.Bytes(), &registered); err != nil {
+		t.Fatal(err)
+	}
+	if !registered.AccountRegistered || registered.AccountURL != acmeServer.URL+"/account/1" || registered.ContactEmail != "admin@example.test" || registered.AccountStatus != "valid" {
+		t.Fatalf("unexpected register response: %#v", registered)
+	}
+
+	statusRec := requestWithCookie(handler, http.MethodGet, "/api/v1/acme/status", "", cookie)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("acme status after registration = %d %s", statusRec.Code, statusRec.Body.String())
+	}
+	var status ACMEStatusDTO
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.AccountRegistered || status.AccountURL != registered.AccountURL || status.ContactEmail != "admin@example.test" || status.AccountStatus != "valid" {
+		t.Fatalf("unexpected acme status after registration: %#v", status)
+	}
+}
+
+func TestRegisterACMEAccountReturnsPersistedStatus(t *testing.T) {
+	dir := t.TempDir()
+	dataFile := filepath.Join(dir, "store.json")
+	keyFile := filepath.Join(dir, "secret.key")
+	st, err := store.Open(dataFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := st.SaveACMEAccount(store.ACMEAccount{
+		DirectoryURL: "https://acme.example.test/directory",
+		AccountURL:   "https://acme.example.test/account/1",
+		ContactEmail: "admin@example.test",
+		Status:       "valid",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	box, err := secretbox.Open(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := New(config.Config{
+		FrontendOrigin:   "https://app.example.test",
+		SecretKeyFile:    keyFile,
+		ACMEDirectoryURL: "http://127.0.0.1:1/directory",
+		SessionTTL:       time.Hour,
+	}, st, box, nil, nil)
+	handler := api.Routes()
+	cookie := registerAdmin(t, handler)
+
+	registerRec := requestWithCookie(handler, http.MethodPost, "/api/v1/acme/account/register", `{"contactEmail":"other@example.test"}`, cookie)
+	if registerRec.Code != http.StatusOK {
+		t.Fatalf("register existing acme account = %d %s", registerRec.Code, registerRec.Body.String())
+	}
+	var registered ACMEAccountRegistrationDTO
+	if err := json.Unmarshal(registerRec.Body.Bytes(), &registered); err != nil {
+		t.Fatal(err)
+	}
+	if !registered.AccountRegistered || registered.AccountURL != "https://acme.example.test/account/1" || registered.ContactEmail != "admin@example.test" || registered.AccountStatus != "valid" {
+		t.Fatalf("unexpected existing register response: %#v", registered)
+	}
+}
+
 func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
 	handler, dataFile := newTestHandlerWithData(t)
 

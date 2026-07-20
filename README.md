@@ -4,14 +4,14 @@
 
 Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证书自动化能力。
 
-当前版本先完成独立运行所需的认证、DNS 账号和证书申请基础闭环，采用：
+当前版本先完成独立运行所需的认证、DNS 账号、ACME 账号注册和证书申请基础闭环，采用：
 
 - 前端静态应用
 - Go API 服务
 - 本地文件持久化
 - 浏览器 HttpOnly 会话
 
-真实 ACME 签发、DNS 服务商适配和部署能力将在此基础上按个人版需求逐步实现。
+真实 ACME 证书订单、DNS 服务商适配和部署能力将在此基础上按个人版需求逐步实现。
 
 ## 已实现功能
 
@@ -28,7 +28,8 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - DNS 账号 SecretKey 使用本地密钥文件加密后写入数据文件，API 响应不返回明文
 - ACME 账号私钥自动生成和加载，为后续真实签发做准备
 - ACME 就绪状态查询，展示账号私钥、目录 URL 和条款确认状态
-- ACME directory 连通性检查，验证核心端点但不注册账号、不创建订单
+- ACME directory 连通性检查，验证核心端点但不创建订单
+- ACME 账号注册，默认使用当前管理员邮箱作为 contact，并持久化账号 URL、状态和联系邮箱
 - 证书申请记录创建、列表和删除
 - 证书申请预检查，不创建记录即可返回规范化域名、DNS 账号和提示
 - 证书申请域名基础校验、SAN 去重和小写规范化
@@ -44,6 +45,9 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 .
 ├── backend/
 │   ├── cmd/api/                  # API 启动入口
+│   ├── internal/acmeaccount/      # ACME 账号 P-256 私钥生成和加载
+│   ├── internal/acmedirectory/    # ACME directory 连通性和端点检查
+│   ├── internal/acmeregister/     # ACME newAccount JWS 注册
 │   ├── internal/auth/            # 密码摘要与会话令牌
 │   ├── internal/config/          # 环境变量配置
 │   ├── internal/httpapi/         # HTTP 路由、处理器和中间件
@@ -65,7 +69,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - **状态管理**：当前使用 React 本地状态
 - **路由**：当前使用浏览器 History API，页面范围为登录、注册和控制台
 - **认证方式**：通过 `fetch` 携带 HttpOnly Cookie 调用 API，不在 LocalStorage 保存访问令牌
-- **控制台能力**：DNS 账号管理、证书申请创建和记录列表
+- **控制台能力**：ACME 状态检查和账号注册、DNS 账号管理、证书申请创建和记录列表
 
 前端默认将 `/api` 请求代理到 `http://localhost:8080`。
 
@@ -75,7 +79,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - **HTTP**：标准库 `net/http`
 - **密码存储**：`golang.org/x/crypto/argon2`
 - **会话存储**：仅在服务端保存会话令牌摘要
-- **数据存储**：JSON 文件，默认路径为 `backend/data/tqqssl-personal.json`
+- **数据存储**：JSON 文件，默认路径为 `backend/data/tqqssl-personal.json`，保存用户、会话、DNS 账号、证书申请和 ACME 账号注册状态
 - **凭据保护**：DNS SecretKey 使用 AES-GCM 加密，默认密钥文件为 `backend/data/tqqssl-personal.key`
 - **ACME 账号**：启动时自动生成或加载 P-256 ECDSA ACME account key，默认路径为 `backend/data/acme-account.key`
 - **配置方式**：环境变量
@@ -96,6 +100,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 | `GET` | `/api/v1/auth/me` | 查询当前登录用户 |
 | `GET` | `/api/v1/acme/status` | 查询 ACME 前置配置就绪状态 |
 | `POST` | `/api/v1/acme/directory/check` | 检查 ACME directory 连通性和核心端点 |
+| `POST` | `/api/v1/acme/account/register` | 注册 ACME 账号并保存账号 URL、状态和联系邮箱 |
 | `GET` | `/api/v1/dns-accounts` | 查询 DNS 账号列表 |
 | `POST` | `/api/v1/dns-accounts` | 创建 DNS 账号 |
 | `PATCH` | `/api/v1/dns-accounts/{id}` | 更新 DNS 账号元数据，可选轮换 SecretKey |
@@ -106,7 +111,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 | `DELETE` | `/api/v1/certificates/applications/{id}` | 删除证书申请记录 |
 
 注册接口只允许在用户数据为空时执行一次。
-DNS 和证书申请接口均要求已登录。
+ACME、DNS 和证书申请接口均要求已登录。
 
 ## 如何运行
 
@@ -157,7 +162,7 @@ http://localhost:5173
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `TQQSSL_ADDR` | `:8080` | API 监听地址 |
-| `TQQSSL_DATA_FILE` | `data/tqqssl-personal.json` | 用户、会话、DNS 账号和证书申请数据文件 |
+| `TQQSSL_DATA_FILE` | `data/tqqssl-personal.json` | 用户、会话、DNS 账号、证书申请和 ACME 账号状态数据文件 |
 | `TQQSSL_SECRET_KEY_FILE` | `data/tqqssl-personal.key` | DNS SecretKey 本地加密密钥文件 |
 | `TQQSSL_ACME_ACCOUNT_KEY_FILE` | `data/acme-account.key` | ACME 账号 P-256 私钥文件 |
 | `TQQSSL_ACME_DIRECTORY_URL` | 空 | ACME directory URL；为空时不会标记 ACME 就绪 |

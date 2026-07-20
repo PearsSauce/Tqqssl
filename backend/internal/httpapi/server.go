@@ -12,6 +12,7 @@ import (
 
 	"github.com/PearsSauce/Tqqssl/backend/internal/acmeaccount"
 	"github.com/PearsSauce/Tqqssl/backend/internal/acmedirectory"
+	"github.com/PearsSauce/Tqqssl/backend/internal/acmeregister"
 	"github.com/PearsSauce/Tqqssl/backend/internal/auth"
 	"github.com/PearsSauce/Tqqssl/backend/internal/config"
 	"github.com/PearsSauce/Tqqssl/backend/internal/id"
@@ -40,11 +41,15 @@ type UserDTO struct {
 }
 
 type ACMEStatusDTO struct {
-	AccountKeyReady bool   `json:"accountKeyReady"`
-	AccountKeyType  string `json:"accountKeyType,omitempty"`
-	DirectoryURL    string `json:"directoryUrl,omitempty"`
-	TermsAgreed     bool   `json:"termsAgreed"`
-	Ready           bool   `json:"ready"`
+	AccountKeyReady   bool   `json:"accountKeyReady"`
+	AccountKeyType    string `json:"accountKeyType,omitempty"`
+	DirectoryURL      string `json:"directoryUrl,omitempty"`
+	TermsAgreed       bool   `json:"termsAgreed"`
+	Ready             bool   `json:"ready"`
+	AccountRegistered bool   `json:"accountRegistered"`
+	AccountURL        string `json:"accountUrl,omitempty"`
+	AccountStatus     string `json:"accountStatus,omitempty"`
+	ContactEmail      string `json:"contactEmail,omitempty"`
 }
 
 type ACMEDirectoryCheckDTO struct {
@@ -56,6 +61,17 @@ type ACMEDirectoryCheckDTO struct {
 	Website                 string   `json:"website,omitempty"`
 	ExternalAccountRequired bool     `json:"externalAccountRequired"`
 	Warnings                []string `json:"warnings"`
+}
+
+type registerACMEAccountRequest struct {
+	ContactEmail string `json:"contactEmail"`
+}
+
+type ACMEAccountRegistrationDTO struct {
+	AccountRegistered bool   `json:"accountRegistered"`
+	AccountURL        string `json:"accountUrl"`
+	AccountStatus     string `json:"accountStatus"`
+	ContactEmail      string `json:"contactEmail"`
 }
 
 func New(cfg config.Config, st *store.Store, secretBox *secretbox.Box, acmeAccountKey *acmeaccount.AccountKey, logger *slog.Logger) *Server {
@@ -79,6 +95,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/me", s.me)
 	mux.HandleFunc("GET /api/v1/acme/status", s.requireAuth(s.acmeStatus))
 	mux.HandleFunc("POST /api/v1/acme/directory/check", s.requireAuth(s.checkACMEDirectory))
+	mux.HandleFunc("POST /api/v1/acme/account/register", s.requireAuth(s.registerACMEAccount))
 	mux.HandleFunc("GET /api/v1/dns-accounts", s.requireAuth(s.listDNSAccounts))
 	mux.HandleFunc("POST /api/v1/dns-accounts", s.requireAuth(s.createDNSAccount))
 	mux.HandleFunc("PATCH /api/v1/dns-accounts/{id}", s.requireAuth(s.updateDNSAccount))
@@ -219,6 +236,12 @@ func (s *Server) acmeStatus(w http.ResponseWriter, _ *http.Request, _ store.User
 		status.AccountKeyType = s.acmeAccountKey.Type()
 	}
 	status.Ready = status.AccountKeyReady && status.DirectoryURL != "" && status.TermsAgreed
+	if account, err := s.store.GetACMEAccount(); err == nil {
+		status.AccountRegistered = account.AccountURL != ""
+		status.AccountURL = account.AccountURL
+		status.AccountStatus = account.Status
+		status.ContactEmail = account.ContactEmail
+	}
 	writeJSON(w, http.StatusOK, status)
 }
 
@@ -244,6 +267,69 @@ func (s *Server) checkACMEDirectory(w http.ResponseWriter, r *http.Request, _ st
 		ExternalAccountRequired: result.ExternalAccountRequired,
 		Warnings:                result.Warnings,
 	})
+}
+
+func (s *Server) registerACMEAccount(w http.ResponseWriter, r *http.Request, user store.User) {
+	var req registerACMEAccountRequest
+	if r.ContentLength != 0 && !decodeJSON(w, r, &req) {
+		return
+	}
+	contactEmail := strings.ToLower(strings.TrimSpace(req.ContactEmail))
+	if contactEmail == "" {
+		contactEmail = strings.ToLower(strings.TrimSpace(user.Email))
+	}
+	if _, err := mail.ParseAddress(contactEmail); err != nil {
+		writeError(w, http.StatusBadRequest, "ACME 联系邮箱格式不正确")
+		return
+	}
+	if existing, err := s.store.GetACMEAccount(); err == nil && strings.TrimSpace(existing.AccountURL) != "" {
+		writeJSON(w, http.StatusOK, toACMEAccountRegistrationDTO(existing))
+		return
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.logger.Error("get acme account failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "读取 ACME 账号失败")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	result, err := acmeregister.Register(ctx, acmeregister.Request{
+		DirectoryURL: s.cfg.ACMEDirectoryURL,
+		ContactEmail: contactEmail,
+		TermsAgreed:  s.cfg.ACMETermsAgreed,
+		AccountKey:   s.acmeAccountKey,
+	}, nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	createdAt := now
+	if existing, err := s.store.GetACMEAccount(); err == nil && !existing.CreatedAt.IsZero() {
+		createdAt = existing.CreatedAt
+	}
+	account, err := s.store.SaveACMEAccount(store.ACMEAccount{
+		DirectoryURL: s.cfg.ACMEDirectoryURL,
+		AccountURL:   result.AccountURL,
+		ContactEmail: result.ContactEmail,
+		Status:       result.Status,
+		CreatedAt:    createdAt,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		s.logger.Error("save acme account failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "保存 ACME 账号失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, toACMEAccountRegistrationDTO(account))
+}
+
+func toACMEAccountRegistrationDTO(account store.ACMEAccount) ACMEAccountRegistrationDTO {
+	return ACMEAccountRegistrationDTO{
+		AccountRegistered: strings.TrimSpace(account.AccountURL) != "",
+		AccountURL:        account.AccountURL,
+		AccountStatus:     account.Status,
+		ContactEmail:      account.ContactEmail,
+	}
 }
 
 func (s *Server) currentUser(r *http.Request) (store.User, bool) {

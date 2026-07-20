@@ -53,6 +53,13 @@ func (k *AccountKey) PublicKey() ecdsa.PublicKey {
 	return k.key.PublicKey
 }
 
+func (k *AccountKey) PrivateKey() *ecdsa.PrivateKey {
+	if k == nil {
+		return nil
+	}
+	return k.key
+}
+
 func loadOrCreate(path string) (*ecdsa.PrivateKey, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

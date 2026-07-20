@@ -52,6 +52,10 @@ export type ACMEStatus = {
   directoryUrl?: string;
   termsAgreed: boolean;
   ready: boolean;
+  accountRegistered: boolean;
+  accountUrl?: string;
+  accountStatus?: string;
+  contactEmail?: string;
 };
 
 export type ACMEDirectoryCheck = {
@@ -63,4 +67,11 @@ export type ACMEDirectoryCheck = {
   website?: string;
   externalAccountRequired: boolean;
   warnings: string[];
+};
+
+export type ACMEAccountRegistration = {
+  accountRegistered: boolean;
+  accountUrl: string;
+  accountStatus: string;
+  contactEmail: string;
 };

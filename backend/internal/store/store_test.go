@@ -130,3 +130,32 @@ func TestDeleteCertificateApplicationUnblocksDNSAccountDeletion(t *testing.T) {
 		t.Fatalf("delete dns after certificate deletion = %v", err)
 	}
 }
+
+func TestSaveAndGetACMEAccount(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "store.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetACMEAccount(); err != ErrNotFound {
+		t.Fatalf("empty acme account error = %v, want ErrNotFound", err)
+	}
+	now := time.Now().UTC()
+	account, err := st.SaveACMEAccount(ACMEAccount{
+		DirectoryURL: "https://acme.example.test/directory",
+		AccountURL:   "https://acme.example.test/account/1",
+		ContactEmail: "admin@example.test",
+		Status:       "valid",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := st.GetACMEAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.AccountURL != account.AccountURL || loaded.ContactEmail != "admin@example.test" || loaded.Status != "valid" {
+		t.Fatalf("unexpected loaded acme account: %#v", loaded)
+	}
+}
