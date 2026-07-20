@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/PearsSauce/Tqqssl/backend/internal/acmeaccount"
+	"github.com/PearsSauce/Tqqssl/backend/internal/acmedirectory"
 	"github.com/PearsSauce/Tqqssl/backend/internal/auth"
 	"github.com/PearsSauce/Tqqssl/backend/internal/config"
 	"github.com/PearsSauce/Tqqssl/backend/internal/id"
@@ -46,6 +47,17 @@ type ACMEStatusDTO struct {
 	Ready           bool   `json:"ready"`
 }
 
+type ACMEDirectoryCheckDTO struct {
+	DirectoryURL            string   `json:"directoryUrl"`
+	NewNonce                string   `json:"newNonce"`
+	NewAccount              string   `json:"newAccount"`
+	NewOrder                string   `json:"newOrder"`
+	TermsOfService          string   `json:"termsOfService,omitempty"`
+	Website                 string   `json:"website,omitempty"`
+	ExternalAccountRequired bool     `json:"externalAccountRequired"`
+	Warnings                []string `json:"warnings"`
+}
+
 func New(cfg config.Config, st *store.Store, secretBox *secretbox.Box, acmeAccountKey *acmeaccount.AccountKey, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
@@ -66,6 +78,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/v1/auth/me", s.me)
 	mux.HandleFunc("GET /api/v1/acme/status", s.requireAuth(s.acmeStatus))
+	mux.HandleFunc("POST /api/v1/acme/directory/check", s.requireAuth(s.checkACMEDirectory))
 	mux.HandleFunc("GET /api/v1/dns-accounts", s.requireAuth(s.listDNSAccounts))
 	mux.HandleFunc("POST /api/v1/dns-accounts", s.requireAuth(s.createDNSAccount))
 	mux.HandleFunc("PATCH /api/v1/dns-accounts/{id}", s.requireAuth(s.updateDNSAccount))
@@ -207,6 +220,30 @@ func (s *Server) acmeStatus(w http.ResponseWriter, _ *http.Request, _ store.User
 	}
 	status.Ready = status.AccountKeyReady && status.DirectoryURL != "" && status.TermsAgreed
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) checkACMEDirectory(w http.ResponseWriter, r *http.Request, _ store.User) {
+	if strings.TrimSpace(s.cfg.ACMEDirectoryURL) == "" {
+		writeError(w, http.StatusBadRequest, "ACME directory URL 未配置")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	result, err := acmedirectory.Check(ctx, s.cfg.ACMEDirectoryURL, nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, ACMEDirectoryCheckDTO{
+		DirectoryURL:            result.DirectoryURL,
+		NewNonce:                result.NewNonce,
+		NewAccount:              result.NewAccount,
+		NewOrder:                result.NewOrder,
+		TermsOfService:          result.TermsOfService,
+		Website:                 result.Website,
+		ExternalAccountRequired: result.ExternalAccountRequired,
+		Warnings:                result.Warnings,
+	})
 }
 
 func (s *Server) currentUser(r *http.Request) (store.User, bool) {

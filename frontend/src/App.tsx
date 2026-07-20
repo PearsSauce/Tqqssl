@@ -2,7 +2,7 @@ import { Alert, Button, Card, Description, FieldError, Form, Input, Label, Spinn
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError, apiRequest } from "./api";
-import type { ACMEStatus, CertificateApplication, CertificatePrecheck, DNSAccount, RegisterOptions, User } from "./types";
+import type { ACMEDirectoryCheck, ACMEStatus, CertificateApplication, CertificatePrecheck, DNSAccount, RegisterOptions, User } from "./types";
 
 type AuthResponse = {
   user: User;
@@ -367,6 +367,10 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => Promise<voi
 }
 
 function ACMEStatusPanel({ status }: { status: ACMEStatus | null }) {
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<ACMEDirectoryCheck | null>(null);
+  const [checkError, setCheckError] = useState("");
+
   if (!status) {
     return null;
   }
@@ -375,6 +379,20 @@ function ACMEStatusPanel({ status }: { status: ACMEStatus | null }) {
     { label: "目录 URL", passed: Boolean(status.directoryUrl), detail: status.directoryUrl || "未配置 TQQSSL_ACME_DIRECTORY_URL" },
     { label: "条款确认", passed: status.termsAgreed, detail: status.termsAgreed ? "已确认" : "未配置 TQQSSL_ACME_TERMS_AGREED=true" }
   ];
+
+  async function checkDirectory() {
+    setChecking(true);
+    setCheckError("");
+    setCheckResult(null);
+    try {
+      const result = await apiRequest<ACMEDirectoryCheck>("/acme/directory/check", { method: "POST" });
+      setCheckResult(result);
+    } catch (err) {
+      setCheckError(errorMessage(err, "ACME directory 检查失败"));
+    } finally {
+      setChecking(false);
+    }
+  }
 
   return (
     <Card className="p-6">
@@ -399,8 +417,49 @@ function ACMEStatusPanel({ status }: { status: ACMEStatus | null }) {
             </div>
           ))}
         </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <Button isDisabled={!status.directoryUrl} isPending={checking} variant="secondary" onPress={() => void checkDirectory()}>
+            {({ isPending }) => <>{isPending ? <Spinner color="current" size="sm" /> : null}检查 ACME Directory</>}
+          </Button>
+          <div className="text-xs leading-5 text-slate-500">只检查 directory JSON 和核心端点，不注册账号、不发起订单。</div>
+        </div>
+        {checkError ? <InlineAlert status="danger" title={checkError} /> : null}
+        {checkResult ? <ACMEDirectoryCheckResult result={checkResult} /> : null}
       </Card.Content>
     </Card>
+  );
+}
+
+function ACMEDirectoryCheckResult({ result }: { result: ACMEDirectoryCheck }) {
+  const endpoints = [
+    { label: "newNonce", value: result.newNonce },
+    { label: "newAccount", value: result.newAccount },
+    { label: "newOrder", value: result.newOrder }
+  ];
+  return (
+    <div className="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-4">
+      <div className="font-medium text-slate-950">Directory 检查通过</div>
+      <div className="mt-1 break-all text-sm text-slate-600">{result.directoryUrl}</div>
+      <div className="mt-3 grid gap-2">
+        {endpoints.map((endpoint) => (
+          <div key={endpoint.label} className="rounded-2xl bg-white/80 px-3 py-2 text-sm shadow-sm">
+            <span className="font-medium text-slate-700">{endpoint.label}</span>
+            <span className="ml-2 break-all text-slate-500">{endpoint.value}</span>
+          </div>
+        ))}
+      </div>
+      {result.termsOfService || result.website ? (
+        <div className="mt-3 grid gap-1 text-xs leading-5 text-slate-600">
+          {result.termsOfService ? <div className="break-all">服务条款：{result.termsOfService}</div> : null}
+          {result.website ? <div className="break-all">CA 网站：{result.website}</div> : null}
+        </div>
+      ) : null}
+      {result.warnings.length > 0 ? (
+        <div className="mt-3 grid gap-1 text-xs leading-5 text-amber-700">
+          {result.warnings.map((warning) => <div key={warning}>• {warning}</div>)}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

@@ -133,6 +133,41 @@ func TestACMEStatusRequiresAuthAndReportsReadiness(t *testing.T) {
 	}
 }
 
+func TestACMEDirectoryCheckRequiresAuthAndValidatesDirectory(t *testing.T) {
+	directoryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"newNonce":"` + "http://example.test/new-nonce" + `",
+			"newAccount":"` + "http://example.test/new-account" + `",
+			"newOrder":"` + "http://example.test/new-order" + `",
+			"meta":{"termsOfService":"` + "http://example.test/terms" + `"}
+		}`))
+	}))
+	defer directoryServer.Close()
+	handler, _ := newTestHandlerWithDirectory(t, directoryServer.URL)
+
+	unauthorizedRec := request(handler, http.MethodPost, "/api/v1/acme/directory/check", "", nil)
+	if unauthorizedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized acme directory check = %d %s, want 401", unauthorizedRec.Code, unauthorizedRec.Body.String())
+	}
+
+	cookie := registerAdmin(t, handler)
+	checkRec := requestWithCookie(handler, http.MethodPost, "/api/v1/acme/directory/check", "", cookie)
+	if checkRec.Code != http.StatusOK {
+		t.Fatalf("acme directory check = %d %s", checkRec.Code, checkRec.Body.String())
+	}
+	var result ACMEDirectoryCheckDTO
+	if err := json.Unmarshal(checkRec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.DirectoryURL != directoryServer.URL || result.NewNonce == "" || result.NewAccount == "" || result.NewOrder == "" {
+		t.Fatalf("unexpected directory check result: %#v", result)
+	}
+	if result.TermsOfService != "http://example.test/terms" {
+		t.Fatalf("terms of service = %q", result.TermsOfService)
+	}
+}
+
 func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
 	handler, dataFile := newTestHandlerWithData(t)
 
@@ -286,6 +321,11 @@ func newTestHandler(t *testing.T) http.Handler {
 
 func newTestHandlerWithData(t *testing.T) (http.Handler, string) {
 	t.Helper()
+	return newTestHandlerWithDirectory(t, "https://acme.example.test/directory")
+}
+
+func newTestHandlerWithDirectory(t *testing.T, directoryURL string) (http.Handler, string) {
+	t.Helper()
 	dir := t.TempDir()
 	dataFile := filepath.Join(dir, "store.json")
 	keyFile := filepath.Join(dir, "secret.key")
@@ -306,7 +346,7 @@ func newTestHandlerWithData(t *testing.T) (http.Handler, string) {
 		FrontendOrigin:     "https://app.example.test",
 		SecretKeyFile:      keyFile,
 		ACMEAccountKeyFile: acmeKeyFile,
-		ACMEDirectoryURL:   "https://acme.example.test/directory",
+		ACMEDirectoryURL:   directoryURL,
 		ACMETermsAgreed:    true,
 		SessionTTL:         time.Hour,
 	}, st, box, acmeAccountKey, nil)

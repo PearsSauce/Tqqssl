@@ -53,3 +53,14 @@ export type ACMEStatus = {
   termsAgreed: boolean;
   ready: boolean;
 };
+
+export type ACMEDirectoryCheck = {
+  directoryUrl: string;
+  newNonce: string;
+  newAccount: string;
+  newOrder: string;
+  termsOfService?: string;
+  website?: string;
+  externalAccountRequired: boolean;
+  warnings: string[];
+};

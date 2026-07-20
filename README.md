@@ -28,6 +28,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - DNS 账号 SecretKey 使用本地密钥文件加密后写入数据文件，API 响应不返回明文
 - ACME 账号私钥自动生成和加载，为后续真实签发做准备
 - ACME 就绪状态查询，展示账号私钥、目录 URL 和条款确认状态
+- ACME directory 连通性检查，验证核心端点但不注册账号、不创建订单
 - 证书申请记录创建、列表和删除
 - 证书申请预检查，不创建记录即可返回规范化域名、DNS 账号和提示
 - 证书申请域名基础校验、SAN 去重和小写规范化
@@ -94,6 +95,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 | `POST` | `/api/v1/auth/logout` | 删除当前服务端会话 |
 | `GET` | `/api/v1/auth/me` | 查询当前登录用户 |
 | `GET` | `/api/v1/acme/status` | 查询 ACME 前置配置就绪状态 |
+| `POST` | `/api/v1/acme/directory/check` | 检查 ACME directory 连通性和核心端点 |
 | `GET` | `/api/v1/dns-accounts` | 查询 DNS 账号列表 |
 | `POST` | `/api/v1/dns-accounts` | 创建 DNS 账号 |
 | `PATCH` | `/api/v1/dns-accounts/{id}` | 更新 DNS 账号元数据，可选轮换 SecretKey |
