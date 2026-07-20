@@ -59,8 +59,10 @@ DNS challenge 自动写入、ACME challenge 通知、ACME finalize、证书下�
 │   ├── internal/id/              # UUIDv7 生成
 │   └── internal/store/           # 本地 JSON 数据存储
 └── frontend/
-    ├── src/App.tsx               # 页面、认证流程和控制台业务编排
+    ├── src/App.tsx               # 认证入口、登录和初始化注册
+    ├── src/forge/personal/console/ # 控制台 feature，按 hook/container/presentation 拆分
     ├── src/layouts/              # 通用控制台侧边栏和顶部导航壳层
+    ├── src/lib/                  # 前端通用格式化和错误处理工具
     ├── src/api.ts                # API 请求封装
     ├── src/styles.css            # Tailwind CSS 与主题样式
     └── vite.config.ts            # Vite、Tailwind 和开发代理配置
@@ -72,7 +74,7 @@ DNS challenge 自动写入、ACME challenge 通知、ACME finalize、证书下�
 - **构建工具**：Vite
 - **组件库**：HeroUI OSS v3
 - **样式**：Tailwind CSS v4
-- **状态管理**：当前使用 React 本地状态
+- **状态管理**：当前使用 React 本地状态，控制台页面状态集中在 feature hook 中编排
 - **路由**：当前使用浏览器 History API，页面范围为登录、注册和控制台
 - **认证方式**：通过 `fetch` 携带 HttpOnly Cookie 调用 API，不在 LocalStorage 保存访问令牌
 - **控制台布局**：通用侧边栏、顶部导航和移动端横向导航，内部 section 支持 URL hash 直达和浏览器回退
