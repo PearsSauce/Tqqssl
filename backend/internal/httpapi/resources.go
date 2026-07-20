@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PearsSauce/Tqqssl/backend/internal/acmeauthz"
 	"github.com/PearsSauce/Tqqssl/backend/internal/acmeorder"
 	"github.com/PearsSauce/Tqqssl/backend/internal/id"
 	"github.com/PearsSauce/Tqqssl/backend/internal/store"
@@ -54,6 +55,25 @@ type CertificatePrecheckDTO struct {
 	ChallengeMode  string   `json:"challengeMode"`
 	DomainCount    int      `json:"domainCount"`
 	Warnings       []string `json:"warnings"`
+}
+
+type CertificateAuthorizationDTO struct {
+	URL      string             `json:"url"`
+	Domain   string             `json:"domain"`
+	Wildcard bool               `json:"wildcard"`
+	Status   string             `json:"status"`
+	Expires  string             `json:"expires,omitempty"`
+	DNS01    *DNS01ChallengeDTO `json:"dns01,omitempty"`
+}
+
+type DNS01ChallengeDTO struct {
+	URL              string `json:"url"`
+	Status           string `json:"status"`
+	Token            string `json:"token"`
+	KeyAuthorization string `json:"keyAuthorization"`
+	RecordName       string `json:"recordName"`
+	RecordType       string `json:"recordType"`
+	RecordValue      string `json:"recordValue"`
 }
 
 type createDNSAccountRequest struct {
@@ -378,6 +398,51 @@ func (s *Server) createCertificateACMEOrder(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, toCertificateApplicationDTO(updated, dnsAccount.Name))
 }
 
+func (s *Server) listCertificateACMEAuthorizations(w http.ResponseWriter, r *http.Request, _ store.User) {
+	applicationID := strings.TrimSpace(r.PathValue("id"))
+	if applicationID == "" {
+		writeError(w, http.StatusBadRequest, "证书申请 ID 不能为空")
+		return
+	}
+	application, err := s.store.GetCertificateApplication(applicationID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "证书申请不存在")
+		return
+	}
+	if err != nil {
+		s.logger.Error("get certificate application failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "读取证书申请失败")
+		return
+	}
+	if strings.TrimSpace(application.OrderURL) == "" || len(application.AuthorizationURLs) == 0 {
+		writeError(w, http.StatusConflict, "需要先创建 ACME order")
+		return
+	}
+	account, err := s.store.GetACMEAccount()
+	if errors.Is(err, store.ErrNotFound) || strings.TrimSpace(account.AccountURL) == "" {
+		writeError(w, http.StatusConflict, "需要先注册 ACME 账号")
+		return
+	}
+	if err != nil {
+		s.logger.Error("get acme account failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "读取 ACME 账号失败")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	result, err := acmeauthz.Inspect(ctx, acmeauthz.Request{
+		DirectoryURL:      s.cfg.ACMEDirectoryURL,
+		AccountURL:        account.AccountURL,
+		AccountKey:        s.acmeAccountKey,
+		AuthorizationURLs: application.AuthorizationURLs,
+	}, nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, toCertificateAuthorizationDTOs(result.Authorizations))
+}
+
 func (s *Server) deleteCertificateApplication(w http.ResponseWriter, r *http.Request, _ store.User) {
 	applicationID := strings.TrimSpace(r.PathValue("id"))
 	if applicationID == "" {
@@ -588,6 +653,32 @@ func toCertificatePrecheckDTO(input certificateApplicationInput) CertificatePrec
 		DomainCount:    1 + len(input.sans),
 		Warnings:       certificatePrecheckWarnings(input.primaryDomain, input.sans),
 	}
+}
+
+func toCertificateAuthorizationDTOs(authorizations []acmeauthz.Authorization) []CertificateAuthorizationDTO {
+	payload := make([]CertificateAuthorizationDTO, 0, len(authorizations))
+	for _, authorization := range authorizations {
+		item := CertificateAuthorizationDTO{
+			URL:      authorization.URL,
+			Domain:   authorization.Domain,
+			Wildcard: authorization.Wildcard,
+			Status:   authorization.Status,
+			Expires:  authorization.Expires,
+		}
+		if authorization.DNS01 != nil {
+			item.DNS01 = &DNS01ChallengeDTO{
+				URL:              authorization.DNS01.URL,
+				Status:           authorization.DNS01.Status,
+				Token:            authorization.DNS01.Token,
+				KeyAuthorization: authorization.DNS01.KeyAuthorization,
+				RecordName:       authorization.DNS01.RecordName,
+				RecordType:       authorization.DNS01.RecordType,
+				RecordValue:      authorization.DNS01.RecordValue,
+			}
+		}
+		payload = append(payload, item)
+	}
+	return payload
 }
 
 func certificatePrecheckWarnings(primaryDomain string, sans []string) []string {

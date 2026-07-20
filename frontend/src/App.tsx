@@ -2,7 +2,7 @@ import { Alert, Button, Card, Description, FieldError, Form, Input, Label, Spinn
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError, apiRequest } from "./api";
-import type { ACMEAccountRegistration, ACMEDirectoryCheck, ACMEStatus, CertificateApplication, CertificatePrecheck, DNSAccount, RegisterOptions, User } from "./types";
+import type { ACMEAccountRegistration, ACMEDirectoryCheck, ACMEStatus, CertificateApplication, CertificateAuthorization, CertificatePrecheck, DNSAccount, RegisterOptions, User } from "./types";
 
 type AuthResponse = {
   user: User;
@@ -779,6 +779,8 @@ function CertificateApplicationsPanel({ applications, acmeStatus, dnsAccounts, o
   const [pending, setPending] = useState(false);
   const [prechecking, setPrechecking] = useState(false);
   const [orderingID, setOrderingID] = useState("");
+  const [loadingAuthorizationsID, setLoadingAuthorizationsID] = useState("");
+  const [authorizationsByApplicationID, setAuthorizationsByApplicationID] = useState<Record<string, CertificateAuthorization[]>>({});
   const [precheck, setPrecheck] = useState<CertificatePrecheck | null>(null);
   const [deletingID, setDeletingID] = useState("");
   const [error, setError] = useState("");
@@ -864,6 +866,19 @@ function CertificateApplicationsPanel({ applications, acmeStatus, dnsAccounts, o
       setError(errorMessage(err, "创建 ACME order 失败"));
     } finally {
       setOrderingID("");
+    }
+  }
+
+  async function loadACMEAuthorizations(applicationID: string) {
+    setLoadingAuthorizationsID(applicationID);
+    setError("");
+    try {
+      const authorizations = await apiRequest<CertificateAuthorization[]>(`/certificates/applications/${applicationID}/acme/authorizations`);
+      setAuthorizationsByApplicationID((current) => ({ ...current, [applicationID]: authorizations }));
+    } catch (err) {
+      setError(errorMessage(err, "读取 ACME 授权失败"));
+    } finally {
+      setLoadingAuthorizationsID("");
     }
   }
 
@@ -953,6 +968,9 @@ function CertificateApplicationsPanel({ applications, acmeStatus, dnsAccounts, o
                       DNS：{application.dnsAccountName || application.dnsAccountId} · Challenge：{application.challengeMode}
                     </div>
                     {application.orderUrl ? <CertificateOrderDetails application={application} /> : null}
+                    {authorizationsByApplicationID[application.id] ? (
+                      <CertificateAuthorizationDetails authorizations={authorizationsByApplicationID[application.id]} />
+                    ) : null}
                     {application.sans.length > 0 ? (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {application.sans.map((domain) => (
@@ -972,6 +990,14 @@ function CertificateApplicationsPanel({ applications, acmeStatus, dnsAccounts, o
                       {({ isPending }) => <>{isPending ? <Spinner color="current" size="sm" /> : null}{application.orderUrl ? "ACME Order 已创建" : "创建 ACME Order"}</>}
                     </Button>
                     <Button
+                      isDisabled={!application.orderUrl}
+                      isPending={loadingAuthorizationsID === application.id}
+                      variant="secondary"
+                      onPress={() => void loadACMEAuthorizations(application.id)}
+                    >
+                      {({ isPending }) => <>{isPending ? <Spinner color="current" size="sm" /> : null}查看 DNS-01 记录</>}
+                    </Button>
+                    <Button
                       variant="secondary"
                       isPending={deletingID === application.id}
                       onPress={() => void deleteApplication(application.id)}
@@ -986,6 +1012,40 @@ function CertificateApplicationsPanel({ applications, acmeStatus, dnsAccounts, o
         </div>
       </Card.Content>
     </Card>
+  );
+}
+
+function CertificateAuthorizationDetails({ authorizations }: { authorizations: CertificateAuthorization[] }) {
+  return (
+    <div className="mt-3 grid gap-3">
+      {authorizations.map((authorization) => (
+        <div key={authorization.url} className="rounded-2xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-slate-600">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="font-medium text-slate-800">{authorization.domain}</div>
+            <StatusPill>{authorization.status}</StatusPill>
+            {authorization.wildcard ? <StatusPill>泛域名</StatusPill> : null}
+          </div>
+          {authorization.dns01 ? (
+            <div className="mt-3 grid gap-2">
+              <DNSRecordRow label="记录名" value={authorization.dns01.recordName} />
+              <DNSRecordRow label="记录类型" value={authorization.dns01.recordType} />
+              <DNSRecordRow label="记录值" value={authorization.dns01.recordValue} />
+            </div>
+          ) : (
+            <div className="mt-2 text-amber-700">该 authorization 未返回 dns-01 challenge。</div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DNSRecordRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-1 rounded-xl bg-white/80 px-3 py-2">
+      <div className="font-medium text-slate-700">{label}</div>
+      <div className="break-all text-slate-600">{value}</div>
+    </div>
   );
 }
 

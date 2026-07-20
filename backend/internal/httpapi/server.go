@@ -104,6 +104,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/certificates/applications/precheck", s.requireAuth(s.precheckCertificateApplication))
 	mux.HandleFunc("POST /api/v1/certificates/applications", s.requireAuth(s.createCertificateApplication))
 	mux.HandleFunc("POST /api/v1/certificates/applications/{id}/acme/order", s.requireAuth(s.createCertificateACMEOrder))
+	mux.HandleFunc("GET /api/v1/certificates/applications/{id}/acme/authorizations", s.requireAuth(s.listCertificateACMEAuthorizations))
 	mux.HandleFunc("DELETE /api/v1/certificates/applications/{id}", s.requireAuth(s.deleteCertificateApplication))
 	return s.withMiddleware(mux)
 }

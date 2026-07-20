@@ -50,6 +50,25 @@ export type CertificatePrecheck = {
   warnings: string[];
 };
 
+export type CertificateAuthorization = {
+  url: string;
+  domain: string;
+  wildcard: boolean;
+  status: string;
+  expires?: string;
+  dns01?: DNS01Challenge;
+};
+
+export type DNS01Challenge = {
+  url: string;
+  status: string;
+  token: string;
+  keyAuthorization: string;
+  recordName: string;
+  recordType: "TXT";
+  recordValue: string;
+};
+
 export type ACMEStatus = {
   accountKeyReady: boolean;
   accountKeyType?: string;

@@ -4,14 +4,14 @@
 
 Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证书自动化能力。
 
-当前版本先完成独立运行所需的认证、DNS 账号、ACME 账号注册、ACME order 创建和证书申请基础闭环，采用：
+当前版本先完成独立运行所需的认证、DNS 账号、ACME 账号注册、ACME order 创建、DNS-01 记录预览和证书申请基础闭环，采用：
 
 - 前端静态应用
 - Go API 服务
 - 本地文件持久化
 - 浏览器 HttpOnly 会话
 
-DNS challenge 执行、ACME finalize、证书下载、DNS 服务商适配和部署能力将在此基础上按个人版需求逐步实现。
+DNS challenge 自动写入、ACME challenge 通知、ACME finalize、证书下载、DNS 服务商适配和部署能力将在此基础上按个人版需求逐步实现。
 
 ## 已实现功能
 
@@ -31,6 +31,7 @@ DNS challenge 执行、ACME finalize、证书下载、DNS 服务商适配和部�
 - ACME directory 连通性检查，验证核心端点但不创建订单
 - ACME 账号注册，默认使用当前管理员邮箱作为 contact，并持久化账号 URL、状态和联系邮箱
 - ACME order 创建，使用已注册账号的 kid JWS 发起 newOrder，并持久化 order URL、order 状态、authorization URLs 和 finalize URL
+- ACME authorization 读取和 DNS-01 TXT 记录预览，展示 `_acme-challenge` 记录名和值，但不自动写入 DNS
 - 证书申请记录创建、列表和删除
 - 证书申请预检查，不创建记录即可返回规范化域名、DNS 账号和提示
 - 证书申请域名基础校验、SAN 去重和小写规范化
@@ -47,6 +48,7 @@ DNS challenge 执行、ACME finalize、证书下载、DNS 服务商适配和部�
 ├── backend/
 │   ├── cmd/api/                  # API 启动入口
 │   ├── internal/acmeaccount/      # ACME 账号 P-256 私钥生成和加载
+│   ├── internal/acmeauthz/        # ACME authorization 读取和 DNS-01 记录计算
 │   ├── internal/acmedirectory/    # ACME directory 连通性和端点检查
 │   ├── internal/acmejws/          # ACME JWS nonce、jwk/kid 签名工具
 │   ├── internal/acmeorder/        # ACME newOrder 创建
@@ -72,7 +74,7 @@ DNS challenge 执行、ACME finalize、证书下载、DNS 服务商适配和部�
 - **状态管理**：当前使用 React 本地状态
 - **路由**：当前使用浏览器 History API，页面范围为登录、注册和控制台
 - **认证方式**：通过 `fetch` 携带 HttpOnly Cookie 调用 API，不在 LocalStorage 保存访问令牌
-- **控制台能力**：ACME 状态检查、账号注册、order 创建、DNS 账号管理、证书申请创建和记录列表
+- **控制台能力**：ACME 状态检查、账号注册、order 创建、DNS-01 记录预览、DNS 账号管理、证书申请创建和记录列表
 
 前端默认将 `/api` 请求代理到 `http://localhost:8080`。
 
@@ -112,6 +114,7 @@ DNS challenge 执行、ACME finalize、证书下载、DNS 服务商适配和部�
 | `POST` | `/api/v1/certificates/applications/precheck` | 预检查证书申请，不创建记录 |
 | `POST` | `/api/v1/certificates/applications` | 创建证书申请记录 |
 | `POST` | `/api/v1/certificates/applications/{id}/acme/order` | 为证书申请创建 ACME order 并保存 order 状态 |
+| `GET` | `/api/v1/certificates/applications/{id}/acme/authorizations` | 读取 ACME authorization 并返回 DNS-01 TXT 记录预览 |
 | `DELETE` | `/api/v1/certificates/applications/{id}` | 删除证书申请记录 |
 
 注册接口只允许在用户数据为空时执行一次。

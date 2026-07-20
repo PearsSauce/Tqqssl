@@ -76,6 +76,47 @@ func NewKIDEnvelope(accountKey *acmeaccount.AccountKey, url string, nonce string
 	}, payload)
 }
 
+func NewKIDPostAsGetEnvelope(accountKey *acmeaccount.AccountKey, url string, nonce string, kid string) (Envelope, error) {
+	privateKey := privateKey(accountKey)
+	if privateKey == nil {
+		return Envelope{}, errors.New("ACME account key 未加载")
+	}
+	kid = strings.TrimSpace(kid)
+	if kid == "" {
+		return Envelope{}, errors.New("ACME account URL 未注册")
+	}
+	return newEnvelopeFromPayload64(privateKey, map[string]any{
+		"alg":   "ES256",
+		"nonce": nonce,
+		"url":   url,
+		"kid":   kid,
+	}, "")
+}
+
+func JWKThumbprint(accountKey *acmeaccount.AccountKey) (string, error) {
+	privateKey := privateKey(accountKey)
+	if privateKey == nil {
+		return "", errors.New("ACME account key 未加载")
+	}
+	payload := struct {
+		Crv string `json:"crv"`
+		Kty string `json:"kty"`
+		X   string `json:"x"`
+		Y   string `json:"y"`
+	}{
+		Crv: "P-256",
+		Kty: "EC",
+		X:   base64.RawURLEncoding.EncodeToString(fixedBytes(privateKey.X, 32)),
+		Y:   base64.RawURLEncoding.EncodeToString(fixedBytes(privateKey.Y, 32)),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	return base64.RawURLEncoding.EncodeToString(digest[:]), nil
+}
+
 func newEnvelope(privateKey *ecdsa.PrivateKey, protected map[string]any, payload any) (Envelope, error) {
 	protectedJSON, err := json.Marshal(protected)
 	if err != nil {
@@ -87,6 +128,19 @@ func newEnvelope(privateKey *ecdsa.PrivateKey, protected map[string]any, payload
 	}
 	protected64 := base64.RawURLEncoding.EncodeToString(protectedJSON)
 	payload64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	return newEnvelopeFromEncoded(privateKey, protected64, payload64)
+}
+
+func newEnvelopeFromPayload64(privateKey *ecdsa.PrivateKey, protected map[string]any, payload64 string) (Envelope, error) {
+	protectedJSON, err := json.Marshal(protected)
+	if err != nil {
+		return Envelope{}, err
+	}
+	protected64 := base64.RawURLEncoding.EncodeToString(protectedJSON)
+	return newEnvelopeFromEncoded(privateKey, protected64, payload64)
+}
+
+func newEnvelopeFromEncoded(privateKey *ecdsa.PrivateKey, protected64 string, payload64 string) (Envelope, error) {
 	digest := sha256.Sum256([]byte(protected64 + "." + payload64))
 	r, s, err := ecdsa.Sign(rand.Reader, privateKey, digest[:])
 	if err != nil {

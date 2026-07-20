@@ -297,6 +297,11 @@ func TestCreateCertificateACMEOrderPersistsOrderStatus(t *testing.T) {
 		Payload   string `json:"payload"`
 		Signature string `json:"signature"`
 	}
+	var receivedAuthorizationEnvelope struct {
+		Protected string `json:"protected"`
+		Payload   string `json:"payload"`
+		Signature string `json:"signature"`
+	}
 	acmeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/directory":
@@ -329,6 +334,26 @@ func TestCreateCertificateACMEOrderPersistsOrderStatus(t *testing.T) {
 				"status":"pending",
 				"authorizations":["` + baseURL + `/authz/1","` + baseURL + `/authz/2"],
 				"finalize":"` + baseURL + `/finalize/1"
+			}`))
+		case "/authz/1":
+			if r.Method != http.MethodPost {
+				t.Fatalf("authorization method = %s, want POST", r.Method)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&receivedAuthorizationEnvelope); err != nil {
+				t.Fatal(err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"identifier":{"type":"dns","value":"example.com"},
+				"status":"pending",
+				"challenges":[{"type":"dns-01","url":"` + baseURL + `/challenge/1","status":"pending","token":"token-one"}]
+			}`))
+		case "/authz/2":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"identifier":{"type":"dns","value":"www.example.com"},
+				"status":"pending",
+				"challenges":[{"type":"dns-01","url":"` + baseURL + `/challenge/2","status":"pending","token":"token-two"}]
 			}`))
 		default:
 			http.NotFound(w, r)
@@ -405,6 +430,34 @@ func TestCreateCertificateACMEOrderPersistsOrderStatus(t *testing.T) {
 	payload := string(payloadJSON)
 	if !strings.Contains(payload, `"value":"example.com"`) || !strings.Contains(payload, `"value":"www.example.com"`) {
 		t.Fatalf("unexpected order payload: %s", payload)
+	}
+	authorizationsRec := requestWithCookie(handler, http.MethodGet, "/api/v1/certificates/applications/"+application.ID+"/acme/authorizations", "", cookie)
+	if authorizationsRec.Code != http.StatusOK {
+		t.Fatalf("list acme authorizations = %d %s", authorizationsRec.Code, authorizationsRec.Body.String())
+	}
+	var authorizations []CertificateAuthorizationDTO
+	if err := json.Unmarshal(authorizationsRec.Body.Bytes(), &authorizations); err != nil {
+		t.Fatal(err)
+	}
+	if len(authorizations) != 2 {
+		t.Fatalf("authorization count = %d, want 2: %#v", len(authorizations), authorizations)
+	}
+	if authorizations[0].Domain != "example.com" || authorizations[0].DNS01 == nil || authorizations[0].DNS01.RecordName != "_acme-challenge.example.com" || authorizations[0].DNS01.RecordType != "TXT" || authorizations[0].DNS01.RecordValue == "" {
+		t.Fatalf("unexpected first authorization: %#v", authorizations[0])
+	}
+	if authorizations[1].Domain != "www.example.com" || authorizations[1].DNS01 == nil || authorizations[1].DNS01.RecordName != "_acme-challenge.www.example.com" || authorizations[1].DNS01.RecordValue == "" {
+		t.Fatalf("unexpected second authorization: %#v", authorizations[1])
+	}
+	authzProtectedJSON, err := base64.RawURLEncoding.DecodeString(receivedAuthorizationEnvelope.Protected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authzProtected := string(authzProtectedJSON)
+	if !strings.Contains(authzProtected, `"kid":"`+acmeServer.URL+`/account/1"`) || strings.Contains(authzProtected, `"jwk"`) {
+		t.Fatalf("unexpected authorization protected header: %s", authzProtected)
+	}
+	if receivedAuthorizationEnvelope.Payload != "" {
+		t.Fatalf("authorization POST-as-GET payload = %q, want empty", receivedAuthorizationEnvelope.Payload)
 	}
 }
 
