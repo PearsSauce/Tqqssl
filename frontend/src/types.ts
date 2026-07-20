@@ -34,3 +34,14 @@ export type CertificateApplication = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type CertificatePrecheck = {
+  primaryDomain: string;
+  sans: string[];
+  dnsAccountId: string;
+  dnsAccountName: string;
+  dnsProvider: string;
+  challengeMode: "dns-01";
+  domainCount: number;
+  warnings: string[];
+};

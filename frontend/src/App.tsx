@@ -2,7 +2,7 @@ import { Alert, Button, Card, Description, FieldError, Form, Input, Label, Spinn
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError, apiRequest } from "./api";
-import type { CertificateApplication, DNSAccount, RegisterOptions, User } from "./types";
+import type { CertificateApplication, CertificatePrecheck, DNSAccount, RegisterOptions, User } from "./types";
 
 type AuthResponse = {
   user: User;
@@ -617,6 +617,8 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
   const [sansText, setSANsText] = useState("");
   const [selectedDNSAccountID, setSelectedDNSAccountID] = useState("");
   const [pending, setPending] = useState(false);
+  const [prechecking, setPrechecking] = useState(false);
+  const [precheck, setPrecheck] = useState<CertificatePrecheck | null>(null);
   const [deletingID, setDeletingID] = useState("");
   const [error, setError] = useState("");
 
@@ -630,22 +632,47 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
     }
   }, [dnsAccounts, selectedDNSAccountID]);
 
+  useEffect(() => {
+    setPrecheck(null);
+  }, [primaryDomain, sansText, selectedDNSAccountID]);
+
+  function certificateRequestBody() {
+    return {
+      primaryDomain,
+      sans: parseDomainList(sansText),
+      dnsAccountId: selectedDNSAccountID,
+      challengeMode: "dns-01"
+    };
+  }
+
+  async function precheckApplication() {
+    setPrechecking(true);
+    setError("");
+    try {
+      const result = await apiRequest<CertificatePrecheck>("/certificates/applications/precheck", {
+        method: "POST",
+        body: certificateRequestBody()
+      });
+      setPrecheck(result);
+    } catch (err) {
+      setError(errorMessage(err, "证书申请预检查失败"));
+    } finally {
+      setPrechecking(false);
+    }
+  }
+
   async function submit() {
     setPending(true);
     setError("");
     try {
       const application = await apiRequest<CertificateApplication>("/certificates/applications", {
         method: "POST",
-        body: {
-          primaryDomain,
-          sans: parseDomainList(sansText),
-          dnsAccountId: selectedDNSAccountID,
-          challengeMode: "dns-01"
-        }
+        body: certificateRequestBody()
       });
       onCreated(application);
       setPrimaryDomain("");
       setSANsText("");
+      setPrecheck(null);
     } catch (err) {
       setError(errorMessage(err, "创建证书申请失败"));
     } finally {
@@ -716,10 +743,23 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
               ))}
             </div>
           </div>
-          <Button isDisabled={dnsAccounts.length === 0} isPending={pending} type="submit">
-            {({ isPending }) => <>{isPending ? <Spinner color="current" size="sm" /> : null}创建证书申请</>}
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button
+              isDisabled={dnsAccounts.length === 0}
+              isPending={prechecking}
+              type="button"
+              variant="secondary"
+              onPress={() => void precheckApplication()}
+            >
+              {({ isPending }) => <>{isPending ? <Spinner color="current" size="sm" /> : null}预检查</>}
+            </Button>
+            <Button isDisabled={dnsAccounts.length === 0} isPending={pending} type="submit">
+              {({ isPending }) => <>{isPending ? <Spinner color="current" size="sm" /> : null}创建证书申请</>}
+            </Button>
+          </div>
         </Form>
+
+        {precheck ? <CertificatePrecheckResult precheck={precheck} /> : null}
 
         <div className="grid gap-3">
           {applications.length === 0 ? (
@@ -761,6 +801,32 @@ function CertificateApplicationsPanel({ applications, dnsAccounts, onCreated, on
         </div>
       </Card.Content>
     </Card>
+  );
+}
+
+function CertificatePrecheckResult({ precheck }: { precheck: CertificatePrecheck }) {
+  const domains = [precheck.primaryDomain, ...precheck.sans];
+  return (
+    <div className="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="font-medium text-slate-950">预检查通过</div>
+          <div className="mt-1 text-sm text-slate-600">
+            DNS：{precheck.dnsAccountName}（{precheck.dnsProvider}） · Challenge：{precheck.challengeMode} · 域名数：{precheck.domainCount}
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {domains.map((domain) => (
+          <span key={domain} className="rounded-full bg-white px-3 py-1 text-xs text-slate-600 shadow-sm">{domain}</span>
+        ))}
+      </div>
+      {precheck.warnings.length > 0 ? (
+        <div className="mt-3 grid gap-1 text-xs leading-5 text-amber-700">
+          {precheck.warnings.map((warning) => <div key={warning}>• {warning}</div>)}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

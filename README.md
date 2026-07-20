@@ -27,6 +27,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 - DNS 账号元数据更新和 SecretKey 轮换
 - DNS 账号 SecretKey 使用本地密钥文件加密后写入数据文件，API 响应不返回明文
 - 证书申请记录创建、列表和删除
+- 证书申请预检查，不创建记录即可返回规范化域名、DNS 账号和提示
 - 证书申请域名基础校验、SAN 去重和小写规范化
 - 一个证书申请只允许一种 challenge mode，当前固定为 `dns-01`
 - 前端登录、注册、DNS 账号和证书申请控制台
@@ -94,6 +95,7 @@ Tqqssl 个人版面向单管理员自用，目标是提供 DNS 管理和 SSL 证
 | `PATCH` | `/api/v1/dns-accounts/{id}` | 更新 DNS 账号元数据，可选轮换 SecretKey |
 | `DELETE` | `/api/v1/dns-accounts/{id}` | 删除未被证书申请引用的 DNS 账号 |
 | `GET` | `/api/v1/certificates/applications` | 查询证书申请记录 |
+| `POST` | `/api/v1/certificates/applications/precheck` | 预检查证书申请，不创建记录 |
 | `POST` | `/api/v1/certificates/applications` | 创建证书申请记录 |
 | `DELETE` | `/api/v1/certificates/applications/{id}` | 删除证书申请记录 |
 

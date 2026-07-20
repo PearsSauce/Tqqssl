@@ -38,6 +38,17 @@ type CertificateApplicationDTO struct {
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
+type CertificatePrecheckDTO struct {
+	PrimaryDomain  string   `json:"primaryDomain"`
+	SANs           []string `json:"sans"`
+	DNSAccountID   string   `json:"dnsAccountId"`
+	DNSAccountName string   `json:"dnsAccountName"`
+	DNSProvider    string   `json:"dnsProvider"`
+	ChallengeMode  string   `json:"challengeMode"`
+	DomainCount    int      `json:"domainCount"`
+	Warnings       []string `json:"warnings"`
+}
+
 type createDNSAccountRequest struct {
 	Name      string `json:"name"`
 	Provider  string `json:"provider"`
@@ -59,6 +70,13 @@ type createCertificateApplicationRequest struct {
 	SANs          []string `json:"sans"`
 	DNSAccountID  string   `json:"dnsAccountId"`
 	ChallengeMode string   `json:"challengeMode"`
+}
+
+type certificateApplicationInput struct {
+	primaryDomain string
+	sans          []string
+	dnsAccount    store.DNSAccount
+	challengeMode string
 }
 
 func (s *Server) requireAuth(next func(http.ResponseWriter, *http.Request, store.User)) http.HandlerFunc {
@@ -238,27 +256,25 @@ func (s *Server) listCertificateApplications(w http.ResponseWriter, _ *http.Requ
 	writeJSON(w, http.StatusOK, payload)
 }
 
+func (s *Server) precheckCertificateApplication(w http.ResponseWriter, r *http.Request, _ store.User) {
+	var req createCertificateApplicationRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	input, ok := s.prepareCertificateApplicationInput(w, req)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, toCertificatePrecheckDTO(input))
+}
+
 func (s *Server) createCertificateApplication(w http.ResponseWriter, r *http.Request, _ store.User) {
 	var req createCertificateApplicationRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	primaryDomain, sans, err := normalizeApplicationDomains(req.PrimaryDomain, req.SANs)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	dnsAccountID := strings.TrimSpace(req.DNSAccountID)
-	if dnsAccountID == "" {
-		writeError(w, http.StatusBadRequest, "DNS 账号不能为空")
-		return
-	}
-	challengeMode := strings.ToLower(strings.TrimSpace(req.ChallengeMode))
-	if challengeMode == "" {
-		challengeMode = challengeModeDNS01
-	}
-	if challengeMode != challengeModeDNS01 {
-		writeError(w, http.StatusBadRequest, "个人版当前仅支持 dns-01 challenge mode")
+	input, ok := s.prepareCertificateApplicationInput(w, req)
+	if !ok {
 		return
 	}
 	applicationID, err := id.NewUUIDv7()
@@ -269,10 +285,10 @@ func (s *Server) createCertificateApplication(w http.ResponseWriter, r *http.Req
 	now := time.Now().UTC()
 	application, err := s.store.CreateCertificateApplication(store.CertificateApplication{
 		ID:            applicationID,
-		PrimaryDomain: primaryDomain,
-		SANs:          sans,
-		DNSAccountID:  dnsAccountID,
-		ChallengeMode: challengeMode,
+		PrimaryDomain: input.primaryDomain,
+		SANs:          input.sans,
+		DNSAccountID:  input.dnsAccount.ID,
+		ChallengeMode: input.challengeMode,
 		Status:        certificatePending,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -286,8 +302,7 @@ func (s *Server) createCertificateApplication(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "创建证书申请失败")
 		return
 	}
-	account, _ := s.store.GetDNSAccount(application.DNSAccountID)
-	writeJSON(w, http.StatusCreated, toCertificateApplicationDTO(application, account.Name))
+	writeJSON(w, http.StatusCreated, toCertificateApplicationDTO(application, input.dnsAccount.Name))
 }
 
 func (s *Server) deleteCertificateApplication(w http.ResponseWriter, r *http.Request, _ store.User) {
@@ -306,6 +321,43 @@ func (s *Server) deleteCertificateApplication(w http.ResponseWriter, r *http.Req
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func (s *Server) prepareCertificateApplicationInput(w http.ResponseWriter, req createCertificateApplicationRequest) (certificateApplicationInput, bool) {
+	primaryDomain, sans, err := normalizeApplicationDomains(req.PrimaryDomain, req.SANs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return certificateApplicationInput{}, false
+	}
+	dnsAccountID := strings.TrimSpace(req.DNSAccountID)
+	if dnsAccountID == "" {
+		writeError(w, http.StatusBadRequest, "DNS 账号不能为空")
+		return certificateApplicationInput{}, false
+	}
+	dnsAccount, err := s.store.GetDNSAccount(dnsAccountID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusBadRequest, "DNS 账号不存在")
+		return certificateApplicationInput{}, false
+	}
+	if err != nil {
+		s.logger.Error("get dns account failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "读取 DNS 账号失败")
+		return certificateApplicationInput{}, false
+	}
+	challengeMode := strings.ToLower(strings.TrimSpace(req.ChallengeMode))
+	if challengeMode == "" {
+		challengeMode = challengeModeDNS01
+	}
+	if challengeMode != challengeModeDNS01 {
+		writeError(w, http.StatusBadRequest, "个人版当前仅支持 dns-01 challenge mode")
+		return certificateApplicationInput{}, false
+	}
+	return certificateApplicationInput{
+		primaryDomain: primaryDomain,
+		sans:          sans,
+		dnsAccount:    dnsAccount,
+		challengeMode: challengeMode,
+	}, true
 }
 
 func validateDNSAccountMetadata(name string, provider string, accessKey string, remark string) error {
@@ -446,6 +498,37 @@ func toCertificateApplicationDTO(application store.CertificateApplication, dnsAc
 		CreatedAt:      application.CreatedAt,
 		UpdatedAt:      application.UpdatedAt,
 	}
+}
+
+func toCertificatePrecheckDTO(input certificateApplicationInput) CertificatePrecheckDTO {
+	return CertificatePrecheckDTO{
+		PrimaryDomain:  input.primaryDomain,
+		SANs:           append([]string(nil), input.sans...),
+		DNSAccountID:   input.dnsAccount.ID,
+		DNSAccountName: input.dnsAccount.Name,
+		DNSProvider:    input.dnsAccount.Provider,
+		ChallengeMode:  input.challengeMode,
+		DomainCount:    1 + len(input.sans),
+		Warnings:       certificatePrecheckWarnings(input.primaryDomain, input.sans),
+	}
+}
+
+func certificatePrecheckWarnings(primaryDomain string, sans []string) []string {
+	warnings := []string{}
+	if len(sans) == 0 {
+		warnings = append(warnings, "未填写 SAN，将只申请主域名。")
+	}
+	hasWildcard := strings.HasPrefix(primaryDomain, "*.")
+	for _, domain := range sans {
+		if strings.HasPrefix(domain, "*.") {
+			hasWildcard = true
+			break
+		}
+	}
+	if hasWildcard {
+		warnings = append(warnings, "检测到泛域名，后续签发必须使用 DNS-01 验证。")
+	}
+	return warnings
 }
 
 func maskValue(value string) string {

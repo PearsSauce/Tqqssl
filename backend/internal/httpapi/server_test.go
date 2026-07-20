@@ -168,6 +168,33 @@ func TestProtectedDNSAndCertificateApplicationFlow(t *testing.T) {
 		t.Fatalf("rotated dns secret should be encrypted in data file: %s", string(data))
 	}
 
+	precheckRec := requestWithCookie(handler, http.MethodPost, "/api/v1/certificates/applications/precheck", `{
+		"primaryDomain":"Example.COM.",
+		"sans":["www.example.com","*.example.com","www.example.com"],
+		"dnsAccountId":"`+dnsAccount.ID+`",
+		"challengeMode":"dns-01"
+	}`, cookie)
+	if precheckRec.Code != http.StatusOK {
+		t.Fatalf("precheck certificate application = %d %s", precheckRec.Code, precheckRec.Body.String())
+	}
+	var precheck CertificatePrecheckDTO
+	if err := json.Unmarshal(precheckRec.Body.Bytes(), &precheck); err != nil {
+		t.Fatal(err)
+	}
+	if precheck.PrimaryDomain != "example.com" || precheck.DomainCount != 3 || precheck.DNSAccountName != dnsAccount.Name || precheck.DNSProvider != dnsAccount.Provider {
+		t.Fatalf("unexpected precheck dto: %#v", precheck)
+	}
+	if len(precheck.SANs) != 2 || precheck.SANs[0] != "www.example.com" || precheck.SANs[1] != "*.example.com" {
+		t.Fatalf("unexpected precheck sans: %#v", precheck.SANs)
+	}
+	if len(precheck.Warnings) == 0 {
+		t.Fatalf("precheck should include wildcard warning: %#v", precheck)
+	}
+	listApplicationsAfterPrecheckRec := requestWithCookie(handler, http.MethodGet, "/api/v1/certificates/applications", "", cookie)
+	if listApplicationsAfterPrecheckRec.Code != http.StatusOK || strings.TrimSpace(listApplicationsAfterPrecheckRec.Body.String()) != "[]" {
+		t.Fatalf("precheck should not create application: %d %s", listApplicationsAfterPrecheckRec.Code, listApplicationsAfterPrecheckRec.Body.String())
+	}
+
 	listDNSRec := requestWithCookie(handler, http.MethodGet, "/api/v1/dns-accounts", "", cookie)
 	if listDNSRec.Code != http.StatusOK {
 		t.Fatalf("list dns accounts = %d %s", listDNSRec.Code, listDNSRec.Body.String())
